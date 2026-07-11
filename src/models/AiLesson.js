@@ -1,0 +1,3 @@
+const mongoose=require('mongoose');
+const schema=new mongoose.Schema({title:{type:String,required:true},content:{type:String,required:true},category:{type:String,default:'general'},tools:[String],imageFileId:{type:String,default:null},accessLevel:{type:String,enum:['free','vip','exclusive'],default:'free'},isActive:{type:Boolean,default:true},views:{type:Number,default:0},favoriteCount:{type:Number,default:0},order:{type:Number,default:0},createdBy:{type:Number,required:true}},{timestamps:true});
+module.exports=mongoose.model('AiLesson',schema);

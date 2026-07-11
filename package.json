@@ -1,0 +1,20 @@
+{
+  "name": "sinioraibot",
+  "version": "5.0.0",
+  "private": true,
+  "description": "SiniorAi Telegram prompt, learning, referral, ratings, requests, gallery, analytics and VIP bot",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "check": "node --check src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "mongoose": "^9.7.3",
+    "telegraf": "^4.16.3"
+  }
+}
