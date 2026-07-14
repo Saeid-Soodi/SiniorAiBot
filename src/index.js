@@ -1,6 +1,7 @@
 const dns = require('dns');
 const http = require('http');
 const { Telegraf } = require('telegraf');
+const packageJson = require("../package.json");
 
 // Some hosts resolve api.telegram.org to IPv6 first while outbound IPv6 is unavailable.
 // Prefer IPv4 so Telegram API requests use the working HTTPS/443 route.
@@ -45,7 +46,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       ok: true,
       service: 'SiniorAiBot',
-      version: '5.2.0',
+      version: packageJson.version,
       status: 'running'
     }));
     return;
