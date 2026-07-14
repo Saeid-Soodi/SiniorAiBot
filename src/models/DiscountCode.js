@@ -13,6 +13,9 @@ const schema = new mongoose.Schema({
   usedBy: [Number],
   isActive: { type: Boolean, default: true },
   stackable: { type: Boolean, default: false },
+  isDeleted: { type: Boolean, default: false, index: true },
+  deletedAt: { type: Date, default: null },
+  deletedBy: { type: Number, default: null },
   createdBy: { type: Number, required: true }
 }, { timestamps: true });
 

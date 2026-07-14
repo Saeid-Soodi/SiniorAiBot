@@ -5,7 +5,7 @@ function referralDiscount(user){
  return null;
 }
 async function validateCode(code,user){
- const item=await DiscountCode.findOne({code:String(code).trim().toUpperCase(),isActive:true});
+ const item=await DiscountCode.findOne({code:String(code).trim().toUpperCase(),isActive:true,isDeleted:{$ne:true}});
  const now=new Date();
  if(!item) throw new Error('کد تخفیف معتبر نیست.');
  if(item.startsAt>now) throw new Error('زمان استفاده از این کد هنوز شروع نشده است.');

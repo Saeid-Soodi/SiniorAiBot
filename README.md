@@ -47,3 +47,28 @@ npm run dev
 ## امنیت
 
 `.env`، توکن ربات، رمز MongoDB و اطلاعات هاست را در GitHub یا اسکرین‌شات عمومی قرار ندهید.
+
+## v5.3.2
+
+- Safe discount-code deletion with preserved usage history and restore support.
+- Professional channel post builder with multiple inline URL buttons.
+- Add buttons using manual URLs or select an existing prompt to generate its deep link automatically.
+- Arrange buttons in new rows or beside the previous button (up to two per row, eight total).
+- Manage/remove buttons before publishing.
+- Full preview with working inline buttons before channel publication.
+- Published channel posts are stored with Telegram message ID, post URL, media data, and button layout.
+- Health endpoint version is read automatically from package.json.
+
+
+## v5.3.2 fixes
+- Fixed admin prompt wizard state progression after entering the title.
+- Fixed channel post builder text/media/button wizard state progression.
+- Added safer prompt validation and duplicate-slug handling.
+- Hardened the in-memory state manager with expiration and update timestamps.
+
+
+## v5.3.2 fixes
+- Fixed admin prompt wizard state progression after entering the title.
+- Fixed channel post builder text/media/button state progression.
+- Added safer prompt validation and duplicate-slug handling.
+- Hardened the in-memory state manager with one-hour state expiration.
