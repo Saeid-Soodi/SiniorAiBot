@@ -1,8 +1,8 @@
 {
   "name": "sinioraibot",
-  "version": "5.2.0",
+  "version": "5.3.0",
   "private": true,
-  "description": "SiniorAi Telegram bot v5.2 with cPanel/Passenger deployment, IPv4-first Telegram API access, VIP, referrals, analytics, lessons, ratings and admin tools",
+  "description": "SiniorAi Telegram bot v5.3 with wallet, gift VIP, admin permissions, unified state manager, channel publishing and improved commerce/admin UX",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
