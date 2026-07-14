@@ -229,16 +229,125 @@ function registerAdminHandlers(bot) {
   });
 
   bot.action(/^a_lessons_(\d+)$/, async ctx => {
-    if (!(await guard(ctx,'lessons'))) return;
-    const page=Number(ctx.match[1]); const total=await AiLesson.countDocuments(); const pages=Math.max(1,Math.ceil(total/PAGE_SIZE));
-    const items=await AiLesson.find().sort({order:1,createdAt:-1}).skip((page-1)*PAGE_SIZE).limit(PAGE_SIZE);
-    const rows=[[{text:'➕ افزودن آموزش',callback_data:'a_lesson_add',style:'success'}],...items.map(l=>[{text:`🎓 ${l.title}`,callback_data:`a_lesson_${l._id}`}]),paginationRow(page,pages,'a_lessons'),adminBack[0]];
-    await ctx.answerCbQuery().catch(()=>{}); return ctx.editMessageText(`🎓 مدیریت آموزش‌ها | ${total} مورد`,{reply_markup:{inline_keyboard:rows}}).catch(()=>ctx.reply('🎓 مدیریت آموزش‌ها',{reply_markup:{inline_keyboard:rows}}));
+    if (!(await guard(ctx, 'lessons'))) return;
+    const requestedPage = Number(ctx.match[1]);
+    const query = { isDeleted: { $ne: true } };
+    const total = await AiLesson.countDocuments(query);
+    const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const page = Math.min(Math.max(requestedPage, 1), pages);
+    const items = await AiLesson.find(query).sort({ order: 1, createdAt: -1 }).skip((page - 1) * PAGE_SIZE).limit(PAGE_SIZE);
+    const rows = [
+      [{ text: '➕ افزودن آموزش', callback_data: 'a_lesson_add', style: 'success' }],
+      ...items.map(l => [{ text: `${l.isActive ? '🎓' : '⏸'} ${l.title}`, callback_data: `a_lesson_${l._id}` }]),
+      [{ text: '🗑 آموزش‌های حذف‌شده', callback_data: 'a_lessons_deleted_1' }],
+      paginationRow(page, pages, 'a_lessons'),
+      adminBack[0]
+    ];
+    await ctx.answerCbQuery().catch(() => {});
+    return ctx.editMessageText(`🎓 مدیریت آموزش‌ها | ${total} مورد`, { reply_markup: { inline_keyboard: rows } })
+      .catch(() => ctx.reply('🎓 مدیریت آموزش‌ها', { reply_markup: { inline_keyboard: rows } }));
   });
-  bot.action(/^a_lesson_([a-f0-9]{24})$/, async ctx => { if (!(await guard(ctx,'lessons'))) return; await ctx.answerCbQuery(); const l=await AiLesson.findById(ctx.match[1]); if(!l)return; return ctx.editMessageText(`🎓 <b>${escapeHtml(l.title)}</b>\n\n${escapeHtml(l.content)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✏️ ویرایش',callback_data:`a_lesson_edit_${l._id}`},{text:'🗑 حذف',callback_data:`a_lesson_del_${l._id}`,style:'danger'}],adminBack[0]]}}); });
-  bot.action(/^a_lesson_edit_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'lessons')))return; const l=await AiLesson.findById(ctx.match[1]); setState(ctx.from.id,'admin_lesson',{step:'title',mode:'edit',id:l._id,data:l.toObject()}); await ctx.answerCbQuery(); return ctx.reply('عنوان جدید را بفرست یا «همان» بنویس.'); });
-  bot.action(/^a_lesson_del_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'lessons')))return; const lesson=await AiLesson.findByIdAndDelete(ctx.match[1]); if(!lesson)return ctx.answerCbQuery('آموزش پیدا نشد.',{show_alert:true}); await ctx.answerCbQuery('حذف شد.'); return ctx.editMessageText('✅ آموزش حذف شد.',{reply_markup:{inline_keyboard:[[{text:'🎓 بازگشت به آموزش‌ها',callback_data:'a_lessons_1'}],adminBack[0]]}}); });
-  bot.action('a_lesson_add', async ctx=>{ if(!(await guard(ctx,'lessons')))return; setState(ctx.from.id,'admin_lesson',{step:'title',data:{}}); await ctx.answerCbQuery(); return ctx.reply('عنوان آموزش را بفرست.'); });
+
+  bot.action(/^a_lesson_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'lessons'))) return;
+    const lesson = await AiLesson.findOne({ _id: ctx.match[1], isDeleted: { $ne: true } });
+    if (!lesson) return ctx.answerCbQuery('آموزش پیدا نشد.', { show_alert: true });
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(`🎓 <b>${escapeHtml(lesson.title)}</b>\n\n${escapeHtml(lesson.content)}\n\nوضعیت: ${lesson.isActive ? 'فعال' : 'غیرفعال'}`, {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [
+        [{ text: '✏️ ویرایش', callback_data: `a_lesson_edit_${lesson._id}` }, { text: '🗑 حذف', callback_data: `a_lesson_delete_${lesson._id}`, style: 'danger' }],
+        [{ text: '🎓 بازگشت به آموزش‌ها', callback_data: 'a_lessons_1' }],
+        adminBack[0]
+      ] }
+    });
+  });
+
+  bot.action(/^a_lesson_edit_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'lessons'))) return;
+    const lesson = await AiLesson.findOne({ _id: ctx.match[1], isDeleted: { $ne: true } });
+    if (!lesson) return ctx.answerCbQuery('آموزش پیدا نشد.', { show_alert: true });
+    setState(ctx.from.id, 'admin_lesson', { step: 'title', mode: 'edit', id: lesson._id, data: lesson.toObject() });
+    await ctx.answerCbQuery();
+    return ctx.reply('عنوان جدید را بفرست یا «همان» بنویس.');
+  });
+
+  bot.action(/^a_lesson_delete_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'lessons'))) return;
+    const lesson = await AiLesson.findOne({ _id: ctx.match[1], isDeleted: { $ne: true } });
+    if (!lesson) return ctx.answerCbQuery('آموزش پیدا نشد.', { show_alert: true });
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(
+      `🗑 <b>حذف آموزش</b>\n\nعنوان: ${escapeHtml(lesson.title)}\n\nآموزش از دسترس کاربران خارج می‌شود، اما برای بازیابی در آرشیو باقی می‌ماند.\n\nاز حذف مطمئنی؟`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+        [{ text: '✅ بله، حذف شود', callback_data: `a_lesson_delete_confirm_${lesson._id}`, style: 'danger' }],
+        [{ text: '❌ انصراف', callback_data: `a_lesson_${lesson._id}` }],
+        [{ text: '🎓 بازگشت به آموزش‌ها', callback_data: 'a_lessons_1' }]
+      ] } }
+    );
+  });
+
+  bot.action(/^a_lesson_delete_confirm_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'lessons'))) return;
+    const lesson = await AiLesson.findOneAndUpdate(
+      { _id: ctx.match[1], isDeleted: { $ne: true } },
+      { isDeleted: true, isActive: false, deletedAt: new Date(), deletedBy: ctx.from.id },
+      { new: true }
+    );
+    if (!lesson) return ctx.answerCbQuery('آموزش قبلاً حذف شده یا پیدا نشد.', { show_alert: true });
+    await audit(ctx.from.id, 'lesson_soft_delete', 'AiLesson', lesson._id);
+    await ctx.answerCbQuery('آموزش حذف شد.');
+    return ctx.editMessageText('✅ آموزش حذف شد و به آرشیو منتقل شد.', { reply_markup: { inline_keyboard: [
+      [{ text: '🎓 بازگشت به مدیریت آموزش‌ها', callback_data: 'a_lessons_1' }],
+      [{ text: '🗑 مشاهده آرشیو', callback_data: 'a_lessons_deleted_1' }],
+      [{ text: '🏠 منوی اصلی پنل', callback_data: 'admin_home' }]
+    ] } });
+  });
+
+  bot.action(/^a_lessons_deleted_(\d+)$/, async ctx => {
+    if (!(await guard(ctx, 'lessons'))) return;
+    const requestedPage = Number(ctx.match[1]);
+    const query = { isDeleted: true };
+    const total = await AiLesson.countDocuments(query);
+    const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const page = Math.min(Math.max(requestedPage, 1), pages);
+    const items = await AiLesson.find(query).sort({ deletedAt: -1, createdAt: -1 }).skip((page - 1) * PAGE_SIZE).limit(PAGE_SIZE);
+    const rows = [
+      ...items.map(l => [{ text: `♻️ ${l.title}`, callback_data: `a_lesson_restore_${l._id}` }]),
+      paginationRow(page, pages, 'a_lessons_deleted'),
+      [{ text: '🔙 بازگشت به آموزش‌های فعال', callback_data: 'a_lessons_1' }],
+      adminBack[0]
+    ];
+    await ctx.answerCbQuery().catch(() => {});
+    return ctx.editMessageText(`🗑 <b>آموزش‌های حذف‌شده</b>\n\nتعداد: ${total}\nبرای بازیابی روی هر مورد بزن.`, {
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: rows }
+    }).catch(() => ctx.reply(`🗑 آموزش‌های حذف‌شده | ${total} مورد`, { reply_markup: { inline_keyboard: rows } }));
+  });
+
+  bot.action(/^a_lesson_restore_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'lessons'))) return;
+    const lesson = await AiLesson.findOneAndUpdate(
+      { _id: ctx.match[1], isDeleted: true },
+      { isDeleted: false, isActive: true, deletedAt: null, deletedBy: null },
+      { new: true }
+    );
+    if (!lesson) return ctx.answerCbQuery('آموزش حذف‌شده پیدا نشد.', { show_alert: true });
+    await audit(ctx.from.id, 'lesson_restore', 'AiLesson', lesson._id);
+    await ctx.answerCbQuery('بازیابی شد.');
+    return ctx.editMessageText(`✅ «${escapeHtml(lesson.title)}» بازیابی و فعال شد.`, {
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+        [{ text: '🎓 مدیریت آموزش‌ها', callback_data: 'a_lessons_1' }],
+        [{ text: '🗑 آرشیو حذف‌شده‌ها', callback_data: 'a_lessons_deleted_1' }]
+      ] }
+    });
+  });
+
+  bot.action('a_lesson_add', async ctx => {
+    if (!(await guard(ctx, 'lessons'))) return;
+    setState(ctx.from.id, 'admin_lesson', { step: 'title', data: {} });
+    await ctx.answerCbQuery();
+    return ctx.reply('عنوان آموزش را بفرست.', { reply_markup: { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'cancel_input', style: 'danger' }], adminBack[0]] } });
+  });
 
   bot.action(/^a_requests_(\d+)$/, ctx => listGeneric(ctx, PromptRequest, {}, Number(ctx.match[1]), 'a_requests', r => [{text:`${r.status==='approved'?'✅':r.status==='rejected'?'❌':'⏳'} ${String(r.text).slice(0,35)}`,callback_data:`a_request_${r._id}`}], 'requests'));
   bot.action(/^a_request_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; await ctx.answerCbQuery(); const r=await PromptRequest.findById(ctx.match[1]); if(!r)return; return ctx.editMessageText(`📝 <b>درخواست</b>\n\n${escapeHtml(r.text)}\n\nوضعیت: ${r.status}\nتاریخ: ${formatDateTime(r.createdAt)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✅ تأیید',callback_data:`req_approve_${r._id}`,style:'success'},{text:'❌ رد',callback_data:`req_reject_${r._id}`,style:'danger'}],[{text:'✏️ ویرایش متن',callback_data:`req_edit_${r._id}`},{text:'🗑 حذف',callback_data:`req_delete_${r._id}`}],adminBack[0]]}}); });
@@ -340,7 +449,7 @@ function registerAdminHandlers(bot) {
   bot.action('a_admin_add',async ctx=>{if(!isOwner(ctx.from.id))return;setState(ctx.from.id,'admin_add',{step:'id',data:{}});await ctx.answerCbQuery();return ctx.reply('آیدی عددی ادمین را بفرست.');});
   bot.action(/^a_admin_([a-f0-9]{24})$/,async ctx=>{if(!isOwner(ctx.from.id))return;const a=await Admin.findById(ctx.match[1]);if(!a)return;await ctx.answerCbQuery();const enabled=Object.entries(a.permissions.toObject?a.permissions.toObject():a.permissions).filter(([,v])=>v).map(([k])=>k).join(', ')||'بدون دسترسی';return ctx.editMessageText(`🛡 ${a.telegramId}\nعنوان: ${a.title}\nوضعیت: ${a.isActive?'فعال':'غیرفعال'}\nمجوزها: ${enabled}`,{reply_markup:{inline_keyboard:[[{text:'✏️ تغییر مجوزها',callback_data:`a_admin_perms_${a._id}`}],[{text:a.isActive?'⏸ غیرفعال':'▶️ فعال',callback_data:`a_admin_toggle_${a._id}`}],[{text:'🗑 حذف ادمین',callback_data:`a_admin_delete_${a._id}`,style:'danger'}],adminBack[0]]}});});
   bot.action(/^a_admin_perms_([a-f0-9]{24})$/,async ctx=>{if(!isOwner(ctx.from.id))return;setState(ctx.from.id,'admin_edit_perms',{id:ctx.match[1]});await ctx.answerCbQuery();return ctx.reply('مجوزهای جدید را با ویرگول بفرست؛ مثال: prompts,lessons یا all');});
-  bot.action(/^a_admin_toggle_([a-f0-9]{24})$/,async ctx=>{if(!isOwner(ctx.from.id))return;const a=await Admin.findById(ctx.match[1]);if(a){a.isActive=!a.isActive;await a.save();}await ctx.answerCbQuery('تغییر کرد.');return showAdmin(ctx);});
+  bot.action(/^a_admin_toggle_([a-f0-9]{24})$/,async ctx=>{if(!isOwner(ctx.from.id))return;const a=await Admin.findById(ctx.match[1]);if(a){a.isActive=!a.isActive;await a.save();}await ctx.answerCbQuery('تغییر کرد.');return ctx.editMessageText('✅ وضعیت ادمین به‌روزرسانی شد.',{reply_markup:{inline_keyboard:[[{text:'🛡 بازگشت به مدیریت ادمین‌ها',callback_data:'a_admins'}],adminBack[0]]}});});
   bot.action(/^a_admin_delete_([a-f0-9]{24})$/, async ctx => {
     if (!isOwner(ctx.from.id)) return ctx.answerCbQuery('فقط مالک اجازه حذف ادمین را دارد.', { show_alert: true });
     const admin = await Admin.findById(ctx.match[1]);
@@ -626,7 +735,7 @@ function registerAdminHandlers(bot) {
         return ctx.reply('پیش‌نمایش آماده است؛ از دکمه‌های زیر پیام قبلی استفاده کن.');
       }
     }
-    if(state.type==='admin_lesson'){const d=state.data;if(d.step==='title'){if(text!=='همان')d.data.title=text;d.step='content';return ctx.reply('متن آموزش را بفرست.');}if(d.step==='content'){if(text!=='همان')d.data.content=text;if(d.mode==='edit')await AiLesson.findByIdAndUpdate(d.id,d.data);else await AiLesson.create({...d.data,createdBy:ctx.from.id,order:await AiLesson.countDocuments()+1});clearState(ctx.from.id);return ctx.reply('✅ ذخیره شد.');}}
+    if(state.type==='admin_lesson'){const d=state.data;if(d.step==='title'){if(text!=='همان')d.data.title=text;d.step='content';return ctx.reply('متن آموزش را بفرست.');}if(d.step==='content'){if(text!=='همان')d.data.content=text;if(d.mode==='edit')await AiLesson.findByIdAndUpdate(d.id,d.data);else await AiLesson.create({...d.data,createdBy:ctx.from.id,order:await AiLesson.countDocuments()+1});clearState(ctx.from.id);return ctx.reply('✅ آموزش ذخیره شد.',{reply_markup:{inline_keyboard:[[{text:'🎓 بازگشت به مدیریت آموزش‌ها',callback_data:'a_lessons_1'}],adminBack[0]]}});}}
     if(state.type==='request_edit'){await PromptRequest.findByIdAndUpdate(state.data.id,{text});clearState(ctx.from.id);return ctx.reply('✅ ویرایش شد.');}
     if(state.type==='admin_code'){const d=state.data;if(d.step==='title'){d.data.title=text;d.step='code';return ctx.reply('کد را بفرست. مثال: SUMMER50');}if(d.step==='code'){d.data.code=text.toUpperCase();d.step='type';return ctx.reply('نوع را بفرست: percent یا fixed');}if(d.step==='type'){d.data.type=text==='fixed'?'fixed':'percent';d.step='value';return ctx.reply('مقدار تخفیف؟');}if(d.step==='value'){d.data.value=Number(text);d.step='days';return ctx.reply('چند روز اعتبار دارد؟');}if(d.step==='days'){d.data.expiresAt=new Date(Date.now()+Number(text)*86400000);d.step='max';return ctx.reply('حداکثر استفاده کلی؟');}if(d.step==='max'){d.data.maxUses=Number(text);d.step='confirm';return ctx.reply(`👁 پیش‌نمایش\nعنوان: ${d.data.title}\nکد: ${d.data.code}\nمقدار: ${d.data.value}\nسقف: ${d.data.maxUses}\nانقضا: ${formatDateTime(d.data.expiresAt)}`,{reply_markup:{inline_keyboard:[[{text:'✅ ساخت کد',callback_data:'code_confirm',style:'success'},{text:'❌ لغو',callback_data:'cancel_input',style:'danger'}]]}});}}
     if(state.type==='admin_add'){const d=state.data;if(d.step==='id'){const id=Number(text);if(!id)return ctx.reply('آیدی عددی معتبر بفرست.');d.data.telegramId=id;d.step='perms';return ctx.reply('مجوزها را با ویرگول بنویس. مثال: prompts,lessons یا all');}if(d.step==='perms'){const names=['prompts','lessons','payments','users','discounts','broadcast','support','channelPosts','requests','results'];const selected=text.toLowerCase()==='all'?names:text.split(',').map(x=>x.trim()).filter(x=>names.includes(x));const permissions=Object.fromEntries(names.map(n=>[n,selected.includes(n)]));await Admin.findOneAndUpdate({telegramId:d.data.telegramId},{telegramId:d.data.telegramId,title:'ادمین',permissions,isActive:true,createdBy:ctx.from.id},{upsert:true,new:true});clearState(ctx.from.id);return ctx.reply('✅ ادمین و سطح دسترسی ذخیره شد.');}}
