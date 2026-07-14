@@ -15,6 +15,7 @@ const { track, trackClick } = require('../services/analyticsService');
 const { attachReferrer, validateReferral } = require('../services/referralService');
 const { calculatePrice, validateCode } = require('../services/discountService');
 const { sendDailyLesson } = require('../services/lessonService');
+const { sendHelp } = require('../services/helpService');
 const { notifyPayment, notifyPromptRequest, notifyPromptResult, notifySupportTicket } = require('../services/adminNotificationService');
 const { setState, getState, clearState } = require('../services/stateManager');
 const { activateOrExtendVip } = require('../services/subscriptionService');
@@ -94,6 +95,7 @@ async function processReceipt(ctx, state) {
 }
 
 function registerUserHandlers(bot) {
+  bot.command('help', sendHelp);
   bot.start(async ctx => {
     const info = parseStart(ctx.startPayload || ''); let user = await upsertUser(ctx.from, info.source, info.campaign);
     if (info.type === 'gift') { try { const result = await redeemGift(info.code, ctx.from.id); return ctx.reply(`🎁 هدیه با موفقیت فعال شد!\n👑 VIP تا ${result.user.vipUntil.toLocaleDateString('fa-IR')} فعال است.`, { reply_markup: await menuFor(ctx.from.id) }); } catch (e) { return ctx.reply(`❌ ${e.message}`, { reply_markup: await menuFor(ctx.from.id) }); } }
@@ -104,6 +106,8 @@ function registerUserHandlers(bot) {
   });
 
   bot.action('back_home', async ctx => { await ctx.answerCbQuery(); clearState(ctx.from.id); return ctx.reply('منوی اصلی', { reply_markup: await menuFor(ctx.from.id) }); });
+  bot.action('help_lessons', async ctx => { await ctx.answerCbQuery(); return sendDailyLesson(ctx); });
+  bot.action('help_support', async ctx => { await ctx.answerCbQuery(); return ctx.reply('🛟 پشتیبانی Sinior Ai', { reply_markup: { inline_keyboard: [[{ text: '🌐 شبکه‌های اجتماعی سینیور', callback_data: 'socials' }], [{ text: '💬 ارسال پیام به پشتیبانی', callback_data: 'support_message', style: 'primary' }]] } }); });
   bot.action('cancel_input', async ctx => { clearState(ctx.from.id); paymentDraft.delete(ctx.from.id); await ctx.answerCbQuery('عملیات لغو شد.'); return ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {}); });
   bot.action('check_join', async ctx => { await ctx.answerCbQuery(); if (!(await isJoined(ctx, ctx.from.id))) return ctx.reply('هنوز عضویت در همه کانال‌ها کامل نشده است.'); const p = pendingPrompt.get(ctx.from.id); return p ? deliverBySlug(ctx, p.slug, p.source, p.campaign) : ctx.reply('✅ عضویت تأیید شد.'); });
 

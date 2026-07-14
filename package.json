@@ -1,8 +1,8 @@
 {
   "name": "sinioraibot",
-  "version": "5.3.5",
+  "version": "5.3.7",
   "private": true,
-  "description": "SiniorAi Telegram bot v5.3.5 release candidate with unified admin deletion flows, lesson archive/restore, safer callbacks, wallet, gifting and channel publishing",
+  "description": "SiniorAi Telegram bot v5.3.7 with unified admin deletion flows, lesson archive/restore, safer callbacks, wallet, gifting and channel publishing",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

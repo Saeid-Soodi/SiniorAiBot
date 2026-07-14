@@ -7,7 +7,10 @@ const schema = new mongoose.Schema({
   status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending', index: true },
   adminNote: { type: String, default: '' },
   reviewedBy: { type: Number, default: null },
-  reviewedAt: { type: Date, default: null }
+  reviewedAt: { type: Date, default: null },
+  isDeleted: { type: Boolean, default: false, index: true },
+  deletedAt: { type: Date, default: null },
+  deletedBy: { type: Number, default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('PromptRequest', schema);

@@ -9,6 +9,9 @@ const Admin = require('../models/Admin');
 const SupportTicket = require('../models/SupportTicket');
 const WalletTransaction = require('../models/WalletTransaction');
 const ChannelPost = require('../models/ChannelPost');
+const ClickEvent = require('../models/ClickEvent');
+const PromptRating = require('../models/PromptRating');
+const GiftCode = require('../models/GiftCode');
 const env = require('../config/env');
 const { setState, getState, clearState } = require('../services/stateManager');
 const { isOwner, isAdmin, can } = require('../services/adminService');
@@ -29,6 +32,22 @@ async function guard(ctx, permission = null) {
   if (!(await isAdmin(ctx.from.id))) { await ctx.answerCbQuery?.('دسترسی ندارید.', { show_alert: true }).catch(() => {}); return false; }
   if (permission && !(await can(ctx.from.id, permission))) { await ctx.answerCbQuery?.('مجوز این بخش را ندارید.', { show_alert: true }).catch(() => {}); return false; }
   return true;
+}
+
+function ownerGuard(ctx) {
+  if (isOwner(ctx.from.id)) return true;
+  ctx.answerCbQuery?.('حذف دائم فقط برای مالک ربات مجاز است.', { show_alert: true }).catch(() => {});
+  return false;
+}
+
+function permanentDeleteWarning(entityName, label) {
+  return `☠️ <b>حذف دائم ${entityName}</b>
+
+${label}
+
+⚠️ این عملیات قابل‌بازیابی نیست و رکورد واقعاً از MongoDB حذف می‌شود.
+
+برای ادامه باید دوباره تأیید کنی.`;
 }
 
 function adminMenu() {
@@ -204,7 +223,10 @@ function registerAdminHandlers(bot) {
     const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     const current = Math.min(Math.max(page, 1), pages);
     const items = await Prompt.find(query).sort({ deletedAt: -1, createdAt: -1 }).skip((current - 1) * PAGE_SIZE).limit(PAGE_SIZE);
-    const rows = items.map(item => [{ text: `♻️ ${item.title}`, callback_data: `a_prompt_restore_${item._id}` }]);
+    const rows = items.map(item => [
+      { text: `♻️ ${item.title}`, callback_data: `a_prompt_restore_${item._id}` },
+      { text: '☠️ حذف دائم', callback_data: `a_prompt_purge_${item._id}`, style: 'danger' }
+    ]);
     rows.push(paginationRow(current, pages, 'a_prompts_deleted'));
     rows.push([{ text: '🔙 بازگشت به پرامپت‌ها', callback_data: 'a_prompts_1' }]);
     await ctx.answerCbQuery().catch(() => {});
@@ -225,6 +247,46 @@ function registerAdminHandlers(bot) {
     await ctx.answerCbQuery('بازیابی شد.');
     return ctx.editMessageText(`✅ «${escapeHtml(prompt.title)}» بازیابی و فعال شد.`, {
       parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '📚 مدیریت پرامپت‌ها', callback_data: 'a_prompts_1' }], [{ text: '🗑 آرشیو حذف‌شده‌ها', callback_data: 'a_prompts_deleted_1' }]] }
+    });
+  });
+
+
+  bot.action(/^a_prompt_purge_([a-f0-9]{24})$/, async ctx => {
+    if (!ownerGuard(ctx)) return;
+    const prompt = await Prompt.findOne({ _id: ctx.match[1], isDeleted: true });
+    if (!prompt) return ctx.answerCbQuery('پرامپت باید ابتدا در آرشیو باشد.', { show_alert: true });
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(permanentDeleteWarning('پرامپت', `عنوان: ${escapeHtml(prompt.title)}
+اسلاگ: <code>${escapeHtml(prompt.slug)}</code>
+
+با حذف دائم، اسلاگ دوباره آزاد می‌شود.`), {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [
+        [{ text: '☠️ بله، برای همیشه حذف شود', callback_data: `a_prompt_purge_confirm_${prompt._id}`, style: 'danger' }],
+        [{ text: '❌ انصراف', callback_data: 'a_prompts_deleted_1' }]
+      ] }
+    });
+  });
+
+  bot.action(/^a_prompt_purge_confirm_([a-f0-9]{24})$/, async ctx => {
+    if (!ownerGuard(ctx)) return;
+    const prompt = await Prompt.findOne({ _id: ctx.match[1], isDeleted: true });
+    if (!prompt) return ctx.answerCbQuery('پرامپت پیدا نشد یا قبلاً حذف دائم شده است.', { show_alert: true });
+    const id = prompt._id;
+    await Promise.all([
+      PromptRating.deleteMany({ promptId: id }),
+      PromptResult.deleteMany({ promptId: id }),
+      ClickEvent.deleteMany({ promptId: id }),
+      User.updateMany({}, { $pull: { favorites: id, receivedPrompts: id } }),
+      Payment.updateMany({ sourcePromptId: id }, { $set: { sourcePromptId: null } })
+    ]);
+    await Prompt.deleteOne({ _id: id });
+    await audit(ctx.from.id, 'prompt_permanent_delete', 'Prompt', id, { slug: prompt.slug });
+    await ctx.answerCbQuery('پرامپت برای همیشه حذف شد.');
+    return ctx.editMessageText(`✅ پرامپت «${escapeHtml(prompt.title)}» برای همیشه از دیتابیس حذف شد.
+
+اسلاگ <code>${escapeHtml(prompt.slug)}</code> دوباره قابل استفاده است.`, {
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🗑 بازگشت به آرشیو', callback_data: 'a_prompts_deleted_1' }], adminBack[0]] }
     });
   });
 
@@ -313,7 +375,7 @@ function registerAdminHandlers(bot) {
     const page = Math.min(Math.max(requestedPage, 1), pages);
     const items = await AiLesson.find(query).sort({ deletedAt: -1, createdAt: -1 }).skip((page - 1) * PAGE_SIZE).limit(PAGE_SIZE);
     const rows = [
-      ...items.map(l => [{ text: `♻️ ${l.title}`, callback_data: `a_lesson_restore_${l._id}` }]),
+      ...items.map(l => [{ text: `♻️ ${l.title}`, callback_data: `a_lesson_restore_${l._id}` }, { text: '☠️ حذف دائم', callback_data: `a_lesson_purge_${l._id}`, style: 'danger' }]),
       paginationRow(page, pages, 'a_lessons_deleted'),
       [{ text: '🔙 بازگشت به آموزش‌های فعال', callback_data: 'a_lessons_1' }],
       adminBack[0]
@@ -342,6 +404,34 @@ function registerAdminHandlers(bot) {
     });
   });
 
+
+  bot.action(/^a_lesson_purge_([a-f0-9]{24})$/, async ctx => {
+    if (!ownerGuard(ctx)) return;
+    const lesson = await AiLesson.findOne({ _id: ctx.match[1], isDeleted: true });
+    if (!lesson) return ctx.answerCbQuery('آموزش باید ابتدا در آرشیو باشد.', { show_alert: true });
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(permanentDeleteWarning('آموزش', `عنوان: ${escapeHtml(lesson.title)}`), {
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+        [{ text: '☠️ بله، برای همیشه حذف شود', callback_data: `a_lesson_purge_confirm_${lesson._id}`, style: 'danger' }],
+        [{ text: '❌ انصراف', callback_data: 'a_lessons_deleted_1' }]
+      ] }
+    });
+  });
+
+  bot.action(/^a_lesson_purge_confirm_([a-f0-9]{24})$/, async ctx => {
+    if (!ownerGuard(ctx)) return;
+    const lesson = await AiLesson.findOne({ _id: ctx.match[1], isDeleted: true });
+    if (!lesson) return ctx.answerCbQuery('آموزش پیدا نشد یا قبلاً حذف دائم شده است.', { show_alert: true });
+    const id = lesson._id;
+    await User.updateMany({}, { $pull: { lessonFavorites: id, recentLessons: id } });
+    await AiLesson.deleteOne({ _id: id });
+    await audit(ctx.from.id, 'lesson_permanent_delete', 'AiLesson', id);
+    await ctx.answerCbQuery('آموزش برای همیشه حذف شد.');
+    return ctx.editMessageText(`✅ آموزش «${escapeHtml(lesson.title)}» برای همیشه از دیتابیس حذف شد.`, {
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🗑 بازگشت به آرشیو', callback_data: 'a_lessons_deleted_1' }], adminBack[0]] }
+    });
+  });
+
   bot.action('a_lesson_add', async ctx => {
     if (!(await guard(ctx, 'lessons'))) return;
     setState(ctx.from.id, 'admin_lesson', { step: 'title', data: {} });
@@ -349,15 +439,51 @@ function registerAdminHandlers(bot) {
     return ctx.reply('عنوان آموزش را بفرست.', { reply_markup: { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'cancel_input', style: 'danger' }], adminBack[0]] } });
   });
 
-  bot.action(/^a_requests_(\d+)$/, ctx => listGeneric(ctx, PromptRequest, {}, Number(ctx.match[1]), 'a_requests', r => [{text:`${r.status==='approved'?'✅':r.status==='rejected'?'❌':'⏳'} ${String(r.text).slice(0,35)}`,callback_data:`a_request_${r._id}`}], 'requests'));
-  bot.action(/^a_request_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; await ctx.answerCbQuery(); const r=await PromptRequest.findById(ctx.match[1]); if(!r)return; return ctx.editMessageText(`📝 <b>درخواست</b>\n\n${escapeHtml(r.text)}\n\nوضعیت: ${r.status}\nتاریخ: ${formatDateTime(r.createdAt)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✅ تأیید',callback_data:`req_approve_${r._id}`,style:'success'},{text:'❌ رد',callback_data:`req_reject_${r._id}`,style:'danger'}],[{text:'✏️ ویرایش متن',callback_data:`req_edit_${r._id}`},{text:'🗑 حذف',callback_data:`req_delete_${r._id}`}],adminBack[0]]}}); });
-  bot.action(/^req_(approve|reject)_(.+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const status=ctx.match[1]==='approve'?'approved':'rejected'; await PromptRequest.findByIdAndUpdate(ctx.match[2],{status,reviewedBy:ctx.from.id,reviewedAt:new Date()}); await ctx.answerCbQuery('ثبت شد.'); return ctx.editMessageText('✅ وضعیت درخواست به‌روزرسانی شد.',{reply_markup:{inline_keyboard:[[{text:'📝 بازگشت به درخواست‌ها',callback_data:'a_requests_1'}],adminBack[0]]}}); });
-  bot.action(/^req_delete_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const request=await PromptRequest.findByIdAndDelete(ctx.match[1]); if(!request)return ctx.answerCbQuery('درخواست پیدا نشد.',{show_alert:true}); await ctx.answerCbQuery('حذف شد.'); return ctx.editMessageText('✅ درخواست حذف شد.',{reply_markup:{inline_keyboard:[[{text:'📝 بازگشت به درخواست‌ها',callback_data:'a_requests_1'}],adminBack[0]]}}); });
+  bot.action(/^a_requests_(\d+)$/, ctx => listGeneric(ctx, PromptRequest, { isDeleted: { $ne: true } }, Number(ctx.match[1]), 'a_requests', r => [{text:`${r.status==='approved'?'✅':r.status==='rejected'?'❌':'⏳'} ${String(r.text).slice(0,35)}`,callback_data:`a_request_${r._id}`}], 'requests'));
+  bot.action(/^a_request_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; await ctx.answerCbQuery(); const r=await PromptRequest.findOne({_id:ctx.match[1],isDeleted:{$ne:true}}); if(!r)return ctx.answerCbQuery('درخواست پیدا نشد.',{show_alert:true}); return ctx.editMessageText(`📝 <b>درخواست</b>
+
+${escapeHtml(r.text)}
+
+وضعیت: ${r.status}
+تاریخ: ${formatDateTime(r.createdAt)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✅ تأیید',callback_data:`req_approve_${r._id}`,style:'success'},{text:'❌ رد',callback_data:`req_reject_${r._id}`,style:'danger'}],[{text:'✏️ ویرایش متن',callback_data:`req_edit_${r._id}`},{text:'🗑 انتقال به آرشیو',callback_data:`req_delete_${r._id}`}],[{text:'🗑 آرشیو درخواست‌ها',callback_data:'a_requests_deleted_1'}],adminBack[0]]}}); });
+  bot.action(/^req_(approve|reject)_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const status=ctx.match[1]==='approve'?'approved':'rejected'; await PromptRequest.findOneAndUpdate({_id:ctx.match[2],isDeleted:{$ne:true}},{status,reviewedBy:ctx.from.id,reviewedAt:new Date()}); await ctx.answerCbQuery('ثبت شد.'); return ctx.editMessageText('✅ وضعیت درخواست به‌روزرسانی شد.',{reply_markup:{inline_keyboard:[[{text:'📝 بازگشت به درخواست‌ها',callback_data:'a_requests_1'}],adminBack[0]]}}); });
+  bot.action(/^req_delete_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const request=await PromptRequest.findOne({_id:ctx.match[1],isDeleted:{$ne:true}}); if(!request)return ctx.answerCbQuery('درخواست پیدا نشد.',{show_alert:true}); await ctx.answerCbQuery(); return ctx.editMessageText(`🗑 <b>آرشیو درخواست</b>
+
+${escapeHtml(String(request.text).slice(0,200))}
+
+درخواست از لیست فعال خارج می‌شود و قابل بازیابی خواهد بود.`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✅ انتقال به آرشیو',callback_data:`req_delete_confirm_${request._id}`,style:'danger'}],[{text:'❌ انصراف',callback_data:`a_request_${request._id}`}]]}}); });
+  bot.action(/^req_delete_confirm_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const request=await PromptRequest.findOneAndUpdate({_id:ctx.match[1],isDeleted:{$ne:true}},{isDeleted:true,deletedAt:new Date(),deletedBy:ctx.from.id},{new:true}); if(!request)return ctx.answerCbQuery('درخواست پیدا نشد.',{show_alert:true}); await audit(ctx.from.id,'request_soft_delete','PromptRequest',request._id); await ctx.answerCbQuery('به آرشیو منتقل شد.'); return ctx.editMessageText('✅ درخواست به آرشیو منتقل شد.',{reply_markup:{inline_keyboard:[[{text:'📝 درخواست‌های فعال',callback_data:'a_requests_1'}],[{text:'🗑 آرشیو درخواست‌ها',callback_data:'a_requests_deleted_1'}],adminBack[0]]}}); });
+  bot.action(/^a_requests_deleted_(\d+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const page=Number(ctx.match[1]); const query={isDeleted:true}; const total=await PromptRequest.countDocuments(query); const pages=Math.max(1,Math.ceil(total/PAGE_SIZE)); const current=Math.min(Math.max(page,1),pages); const items=await PromptRequest.find(query).sort({deletedAt:-1}).skip((current-1)*PAGE_SIZE).limit(PAGE_SIZE); const rows=items.map(r=>[{text:`♻️ ${String(r.text).slice(0,24)}`,callback_data:`req_restore_${r._id}`},{text:'☠️ حذف دائم',callback_data:`req_purge_${r._id}`,style:'danger'}]); rows.push(paginationRow(current,pages,'a_requests_deleted')); rows.push([{text:'🔙 درخواست‌های فعال',callback_data:'a_requests_1'}]); rows.push(adminBack[0]); await ctx.answerCbQuery().catch(()=>{}); return ctx.editMessageText(`🗑 آرشیو درخواست‌ها | ${total} مورد`,{reply_markup:{inline_keyboard:rows}}); });
+  bot.action(/^req_restore_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const request=await PromptRequest.findOneAndUpdate({_id:ctx.match[1],isDeleted:true},{isDeleted:false,deletedAt:null,deletedBy:null},{new:true}); if(!request)return ctx.answerCbQuery('درخواست پیدا نشد.',{show_alert:true}); await audit(ctx.from.id,'request_restore','PromptRequest',request._id); await ctx.answerCbQuery('بازیابی شد.'); return ctx.editMessageText('✅ درخواست بازیابی شد.',{reply_markup:{inline_keyboard:[[{text:'📝 درخواست‌های فعال',callback_data:'a_requests_1'}],[{text:'🗑 آرشیو',callback_data:'a_requests_deleted_1'}]]}}); });
+  bot.action(/^req_purge_([a-f0-9]{24})$/, async ctx=>{ if(!ownerGuard(ctx))return; const request=await PromptRequest.findOne({_id:ctx.match[1],isDeleted:true}); if(!request)return ctx.answerCbQuery('درخواست باید ابتدا در آرشیو باشد.',{show_alert:true}); await ctx.answerCbQuery(); return ctx.editMessageText(permanentDeleteWarning('درخواست',`متن: ${escapeHtml(String(request.text).slice(0,200))}`),{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'☠️ حذف دائم درخواست',callback_data:`req_purge_confirm_${request._id}`,style:'danger'}],[{text:'❌ انصراف',callback_data:'a_requests_deleted_1'}]]}}); });
+  bot.action(/^req_purge_confirm_([a-f0-9]{24})$/, async ctx=>{ if(!ownerGuard(ctx))return; const request=await PromptRequest.findOneAndDelete({_id:ctx.match[1],isDeleted:true}); if(!request)return ctx.answerCbQuery('درخواست پیدا نشد.',{show_alert:true}); await audit(ctx.from.id,'request_permanent_delete','PromptRequest',request._id); await ctx.answerCbQuery('برای همیشه حذف شد.'); return ctx.editMessageText('✅ درخواست برای همیشه از دیتابیس حذف شد.',{reply_markup:{inline_keyboard:[[{text:'🗑 بازگشت به آرشیو',callback_data:'a_requests_deleted_1'}],adminBack[0]]}}); });
   bot.action(/^req_edit_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; setState(ctx.from.id,'request_edit',{id:ctx.match[1]}); await ctx.answerCbQuery(); return ctx.reply('متن جدید درخواست را بفرست.'); });
 
-  bot.action(/^a_payments_(\d+)$/, ctx => listGeneric(ctx, Payment, {}, Number(ctx.match[1]), 'a_payments', p => [{text:`${p.status==='approved'?'✅':p.status==='rejected'?'❌':'⏳'} ${p.paymentCode} | ${formatToman(p.finalPrice)}`,callback_data:`a_payment_${p._id}`}], 'payments'));
-  bot.action(/^a_payment_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; await ctx.answerCbQuery(); const p=await Payment.findById(ctx.match[1]); const u=await User.findOne({telegramId:p.userTelegramId}); return ctx.editMessageText(`💳 <b>${p.paymentCode}</b>\n\n👤 ${escapeHtml(u?.firstName||'کاربر')} ${u?.username?`(@${escapeHtml(u.username)})`:''}\n🆔 <code>${p.userTelegramId}</code>\nنوع: ${p.type}\nمبلغ: ${formatToman(p.finalPrice)}\nتاریخ: ${formatDateTime(p.createdAt)}\nوضعیت: ${p.status}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:adminBack}}); });
+  bot.action(/^a_payments_(\d+)$/, ctx => listGeneric(ctx, Payment, { isDeleted: { $ne: true } }, Number(ctx.match[1]), 'a_payments', p => [{text:`${p.status==='approved'?'✅':p.status==='rejected'?'❌':'⏳'} ${p.paymentCode} | ${formatToman(p.finalPrice)}`,callback_data:`a_payment_${p._id}`}], 'payments'));
+  bot.action(/^a_payment_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; await ctx.answerCbQuery(); const p=await Payment.findOne({_id:ctx.match[1],isDeleted:{$ne:true}}); if(!p)return ctx.answerCbQuery('پرداخت پیدا نشد.',{show_alert:true}); const u=await User.findOne({telegramId:p.userTelegramId}); return ctx.editMessageText(`💳 <b>${p.paymentCode}</b>
 
+👤 ${escapeHtml(u?.firstName||'کاربر')} ${u?.username?`(@${escapeHtml(u.username)})`:''}
+🆔 <code>${p.userTelegramId}</code>
+نوع: ${p.type}
+مبلغ: ${formatToman(p.finalPrice)}
+تاریخ: ${formatDateTime(p.createdAt)}
+وضعیت: ${p.status}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'🗑 انتقال به آرشیو',callback_data:`a_payment_delete_${p._id}`,style:'danger'}],[{text:'🗑 آرشیو پرداخت‌ها',callback_data:'a_payments_deleted_1'}],adminBack[0]]}}); });
+  bot.action(/^a_payment_delete_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; const p=await Payment.findOne({_id:ctx.match[1],isDeleted:{$ne:true}}); if(!p)return ctx.answerCbQuery('پرداخت پیدا نشد.',{show_alert:true}); await ctx.answerCbQuery(); return ctx.editMessageText(`🗑 <b>آرشیو پرداخت</b>
+
+کد: <code>${escapeHtml(p.paymentCode||String(p._id))}</code>
+مبلغ: ${formatToman(p.finalPrice)}
+وضعیت: ${p.status}
+
+این کار اثر مالی پرداخت تأییدشده را برنمی‌گرداند؛ فقط رکورد را از لیست فعال خارج می‌کند.`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✅ انتقال به آرشیو',callback_data:`a_payment_delete_confirm_${p._id}`,style:'danger'}],[{text:'❌ انصراف',callback_data:`a_payment_${p._id}`}]]}}); });
+  bot.action(/^a_payment_delete_confirm_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; const p=await Payment.findOneAndUpdate({_id:ctx.match[1],isDeleted:{$ne:true}},{isDeleted:true,deletedAt:new Date(),deletedBy:ctx.from.id},{new:true}); if(!p)return ctx.answerCbQuery('پرداخت پیدا نشد.',{show_alert:true}); await audit(ctx.from.id,'payment_soft_delete','Payment',p._id); await ctx.answerCbQuery('به آرشیو منتقل شد.'); return ctx.editMessageText('✅ پرداخت به آرشیو منتقل شد.',{reply_markup:{inline_keyboard:[[{text:'💳 پرداخت‌های فعال',callback_data:'a_payments_1'}],[{text:'🗑 آرشیو پرداخت‌ها',callback_data:'a_payments_deleted_1'}],adminBack[0]]}}); });
+  bot.action(/^a_payments_deleted_(\d+)$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; const page=Number(ctx.match[1]); const query={isDeleted:true}; const total=await Payment.countDocuments(query); const pages=Math.max(1,Math.ceil(total/PAGE_SIZE)); const current=Math.min(Math.max(page,1),pages); const items=await Payment.find(query).sort({deletedAt:-1}).skip((current-1)*PAGE_SIZE).limit(PAGE_SIZE); const rows=items.map(p=>[{text:`♻️ ${p.paymentCode||p._id}`,callback_data:`a_payment_restore_${p._id}`},{text:'☠️ حذف دائم',callback_data:`a_payment_purge_${p._id}`,style:'danger'}]); rows.push(paginationRow(current,pages,'a_payments_deleted')); rows.push([{text:'🔙 پرداخت‌های فعال',callback_data:'a_payments_1'}]); rows.push(adminBack[0]); await ctx.answerCbQuery().catch(()=>{}); return ctx.editMessageText(`🗑 آرشیو پرداخت‌ها | ${total} مورد`,{reply_markup:{inline_keyboard:rows}}); });
+  bot.action(/^a_payment_restore_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; const p=await Payment.findOneAndUpdate({_id:ctx.match[1],isDeleted:true},{isDeleted:false,deletedAt:null,deletedBy:null},{new:true}); if(!p)return ctx.answerCbQuery('پرداخت پیدا نشد.',{show_alert:true}); await audit(ctx.from.id,'payment_restore','Payment',p._id); await ctx.answerCbQuery('بازیابی شد.'); return ctx.editMessageText('✅ پرداخت به لیست فعال برگشت.',{reply_markup:{inline_keyboard:[[{text:'💳 پرداخت‌ها',callback_data:'a_payments_1'}],[{text:'🗑 آرشیو',callback_data:'a_payments_deleted_1'}]]}}); });
+  bot.action(/^a_payment_purge_([a-f0-9]{24})$/, async ctx=>{ if(!ownerGuard(ctx))return; const p=await Payment.findOne({_id:ctx.match[1],isDeleted:true}); if(!p)return ctx.answerCbQuery('پرداخت باید ابتدا در آرشیو باشد.',{show_alert:true}); await ctx.answerCbQuery(); return ctx.editMessageText(permanentDeleteWarning('پرداخت',`کد: <code>${escapeHtml(p.paymentCode||String(p._id))}</code>
+مبلغ: ${formatToman(p.finalPrice)}
+وضعیت: ${p.status}
+
+⚠️ حذف رکورد پرداخت، اشتراک فعال‌شده یا موجودی کیف پول را خودکار برنمی‌گرداند.`),{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'☠️ حذف دائم پرداخت',callback_data:`a_payment_purge_confirm_${p._id}`,style:'danger'}],[{text:'❌ انصراف',callback_data:'a_payments_deleted_1'}]]}}); });
+  bot.action(/^a_payment_purge_confirm_([a-f0-9]{24})$/, async ctx=>{ if(!ownerGuard(ctx))return; const p=await Payment.findOneAndDelete({_id:ctx.match[1],isDeleted:true}); if(!p)return ctx.answerCbQuery('پرداخت پیدا نشد.',{show_alert:true}); await Promise.all([GiftCode.updateMany({paymentId:p._id},{$set:{paymentId:null}}),WalletTransaction.updateMany({referenceId:p._id,referenceType:'payment'},{$set:{referenceId:null}})]); await audit(ctx.from.id,'payment_permanent_delete','Payment',p._id,{paymentCode:p.paymentCode,status:p.status,finalPrice:p.finalPrice}); await ctx.answerCbQuery('برای همیشه حذف شد.'); return ctx.editMessageText('✅ رکورد پرداخت برای همیشه از دیتابیس حذف شد. اثر مالی قبلی دست‌نخورده باقی مانده است.',{reply_markup:{inline_keyboard:[[{text:'🗑 بازگشت به آرشیو',callback_data:'a_payments_deleted_1'}],adminBack[0]]}}); });
   bot.action(/^pay_approve_([a-f0-9]{24})$/, async ctx => { if (!(await guard(ctx,'payments'))) return; await ctx.answerCbQuery(); const p=await Payment.findById(ctx.match[1]); if(!p||p.status!=='pending')return;
     p.status='approved';p.reviewedBy=ctx.from.id;p.reviewedAt=new Date();await p.save(); let message='✅ پرداخت تأیید شد.';
     if(p.type==='wallet_topup'){ await creditWallet(p.userTelegramId,p.finalPrice,{referenceId:p._id,createdBy:ctx.from.id}); message=`✅ کیف پولت ${formatToman(p.finalPrice)} شارژ شد.`; }
@@ -429,7 +555,7 @@ function registerAdminHandlers(bot) {
     const pages=Math.max(1,Math.ceil(total/PAGE_SIZE));
     const items=await DiscountCode.find(query).sort({deletedAt:-1}).skip((page-1)*PAGE_SIZE).limit(PAGE_SIZE);
     const rows=[
-      ...items.map(c=>[{text:`♻️ ${c.title} | ${c.code}`,callback_data:`a_code_restore_${c._id}`}]),
+      ...items.map(c=>[{text:`♻️ ${c.title} | ${c.code}`,callback_data:`a_code_restore_${c._id}`},{text:'☠️ حذف دائم',callback_data:`a_code_purge_${c._id}`,style:'danger'}]),
       paginationRow(page,pages,'a_codes_deleted'),
       [{text:'🔙 کدهای فعال',callback_data:'a_codes_1'}],
       adminBack[0]
@@ -443,6 +569,26 @@ function registerAdminHandlers(bot) {
     await audit(ctx.from.id,'discount_restore','DiscountCode',ctx.match[1]);
     await ctx.answerCbQuery('بازیابی شد.');
     return ctx.editMessageText('✅ کد تخفیف دوباره فعال شد.',{reply_markup:{inline_keyboard:[adminBack[0]]}});
+  });
+
+
+  bot.action(/^a_code_purge_([a-f0-9]{24})$/, async ctx=>{
+    if(!ownerGuard(ctx))return;
+    const c=await DiscountCode.findOne({_id:ctx.match[1],isDeleted:true});
+    if(!c)return ctx.answerCbQuery('کد باید ابتدا در آرشیو باشد.',{show_alert:true});
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(permanentDeleteWarning('کد تخفیف',`عنوان: ${escapeHtml(c.title)}
+کد: <code>${escapeHtml(c.code)}</code>
+استفاده ثبت‌شده: ${c.usedCount}`),{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'☠️ حذف دائم کد',callback_data:`a_code_purge_confirm_${c._id}`,style:'danger'}],[{text:'❌ انصراف',callback_data:'a_codes_deleted_1'}]]}});
+  });
+  bot.action(/^a_code_purge_confirm_([a-f0-9]{24})$/, async ctx=>{
+    if(!ownerGuard(ctx))return;
+    const c=await DiscountCode.findOneAndDelete({_id:ctx.match[1],isDeleted:true});
+    if(!c)return ctx.answerCbQuery('کد پیدا نشد.',{show_alert:true});
+    await User.updateMany({appliedDiscountCode:c.code},{$set:{appliedDiscountCode:null}});
+    await audit(ctx.from.id,'discount_permanent_delete','DiscountCode',c._id,{code:c.code,usedCount:c.usedCount});
+    await ctx.answerCbQuery('برای همیشه حذف شد.');
+    return ctx.editMessageText(`✅ کد <code>${escapeHtml(c.code)}</code> برای همیشه از دیتابیس حذف شد.`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'🗑 بازگشت به آرشیو',callback_data:'a_codes_deleted_1'}],adminBack[0]]}});
   });
 
   bot.action('a_admins',async ctx=>{if(!isOwner(ctx.from.id))return ctx.answerCbQuery('فقط مالک.');const rows=await Admin.find().sort({createdAt:-1});await ctx.answerCbQuery();const buttons=rows.map(a=>[{text:`${a.isActive?'✅':'❌'} ${a.telegramId} | ${a.title}`,callback_data:`a_admin_${a._id}`}]);buttons.unshift([{text:'➕ افزودن ادمین',callback_data:'a_admin_add',style:'success'}]);buttons.push(adminBack[0]);return ctx.editMessageText(`🛡 مدیریت ادمین‌ها\n\n${rows.length} ادمین ثبت شده.`,{reply_markup:{inline_keyboard:buttons}});});
@@ -808,7 +954,12 @@ function registerAdminHandlers(bot) {
         prompt = await Prompt.findByIdAndUpdate(flow.promptId, draft, { new: true, runValidators: true });
       } else {
         const duplicate = await Prompt.findOne({ slug: draft.slug });
-        if (duplicate) return ctx.answerCbQuery('این اسلاگ قبلاً استفاده شده است.', { show_alert: true });
+        if (duplicate) {
+          const message = duplicate.isDeleted
+            ? 'این اسلاگ متعلق به یک پرامپت آرشیوشده است. آن را بازیابی یا حذف دائم کن تا اسلاگ آزاد شود.'
+            : 'این اسلاگ قبلاً توسط یک پرامپت فعال استفاده شده است.';
+          return ctx.answerCbQuery(message, { show_alert: true });
+        }
         prompt = await Prompt.create({ ...draft, createdBy: ctx.from.id });
       }
 

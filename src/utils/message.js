@@ -17,4 +17,35 @@ async function safeDelete(ctx, messageId) {
   } catch (_) {}
 }
 
-module.exports = { editOrReply, safeDelete };
+
+async function sendLongMessage(ctx, text, extra = {}, options = {}) {
+  const maxLength = Number(options.maxLength || 3800);
+  const normalized = String(text || '').trim();
+  if (!normalized) return [];
+
+  const parts = [];
+  let remaining = normalized;
+
+  while (remaining.length > maxLength) {
+    let splitAt = remaining.lastIndexOf('\n\n', maxLength);
+    if (splitAt < Math.floor(maxLength * 0.5)) splitAt = remaining.lastIndexOf('\n', maxLength);
+    if (splitAt < Math.floor(maxLength * 0.5)) splitAt = remaining.lastIndexOf(' ', maxLength);
+    if (splitAt < Math.floor(maxLength * 0.5)) splitAt = maxLength;
+
+    parts.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+
+  if (remaining) parts.push(remaining);
+
+  const sent = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const isLast = i === parts.length - 1;
+    const partExtra = { ...extra };
+    if (!isLast && partExtra.reply_markup) delete partExtra.reply_markup;
+    sent.push(await ctx.reply(parts[i], partExtra));
+  }
+  return sent;
+}
+
+module.exports = { editOrReply, safeDelete, sendLongMessage };
