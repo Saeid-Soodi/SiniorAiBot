@@ -20,6 +20,7 @@ const { audit } = require('../services/auditService');
 const { paginationRow } = require('../utils/pagination');
 const { formatToman, formatDateTime } = require('../utils/format');
 const escapeHtml = require('../utils/html');
+const { promptSkipKeyboard } = require('../keyboards/main');
 
 const PAGE_SIZE = 8;
 const adminBack = [[{ text: '🔙 بازگشت', callback_data: 'admin_home' }, { text: '🏠 منوی اصلی پنل', callback_data: 'admin_home' }]];
@@ -113,7 +114,7 @@ function registerAdminHandlers(bot) {
 
   bot.action('a_prompt_add', async ctx => { if (!(await guard(ctx,'prompts'))) return; await ctx.answerCbQuery(); setState(ctx.from.id, 'admin_prompt', { step: 'title', data: {} }); return ctx.reply('➕ <b>افزودن پرامپت</b>\n\nعنوان نمایشی را بفرست.\nمثال: دختر تابستانی در ساحل', { parse_mode: 'HTML', reply_markup: { inline_keyboard: adminBack } }); });
   bot.action(/^a_prompts_(\d+)$/, ctx => listGeneric(ctx, Prompt, {}, Number(ctx.match[1]), 'a_prompts', p => [{ text: `✨ ${p.title}`, callback_data: `a_prompt_${p._id}` }], 'prompts'));
-  bot.action(/^a_prompt_(.+)$/, async ctx => { if (!(await guard(ctx,'prompts'))) return; await ctx.answerCbQuery(); const p = await Prompt.findById(ctx.match[1]); if (!p) return; return ctx.editMessageText(promptPreview(p), { parse_mode:'HTML', reply_markup:{ inline_keyboard:[[{text:'✏️ ویرایش',callback_data:`a_prompt_edit_${p._id}`},{text:'🗑 حذف',callback_data:`a_prompt_del_${p._id}`,style:'danger'}],[{text:'🔗 لینک دریافت',url:`https://t.me/${env.botUsername}?start=prompt_${p.slug}`}],adminBack[0]] } }).catch(()=>{}); });
+  bot.action(/^a_prompt_([a-f0-9]{24})$/, async ctx => { if (!(await guard(ctx,'prompts'))) return; await ctx.answerCbQuery(); const p = await Prompt.findById(ctx.match[1]); if (!p) return; return ctx.editMessageText(promptPreview(p), { parse_mode:'HTML', reply_markup:{ inline_keyboard:[[{text:'✏️ ویرایش',callback_data:`a_prompt_edit_${p._id}`},{text:'🗑 حذف',callback_data:`a_prompt_del_${p._id}`,style:'danger'}],[{text:'🔗 لینک دریافت',url:`https://t.me/${env.botUsername}?start=prompt_${p.slug}`}],adminBack[0]] } }).catch(()=>{}); });
   bot.action(/^a_prompt_edit_(.+)$/, async ctx => { if (!(await guard(ctx,'prompts'))) return; await ctx.answerCbQuery(); const p=await Prompt.findById(ctx.match[1]); setState(ctx.from.id,'admin_prompt',{step:'title',mode:'edit',promptId:p._id,data:p.toObject()}); return ctx.reply('ویرایش شروع شد. عنوان را بفرست یا «همان» بنویس.',{reply_markup:{inline_keyboard:adminBack}}); });
   bot.action(/^a_prompt_del_(.+)$/, async ctx => { if (!(await guard(ctx,'prompts'))) return; await Prompt.findByIdAndUpdate(ctx.match[1],{isActive:false}); await audit(ctx.from.id,'prompt_soft_delete','Prompt',ctx.match[1]); await ctx.answerCbQuery('غیرفعال شد.'); return showAdmin(ctx); });
 
@@ -124,19 +125,19 @@ function registerAdminHandlers(bot) {
     const rows=[[{text:'➕ افزودن آموزش',callback_data:'a_lesson_add',style:'success'}],...items.map(l=>[{text:`🎓 ${l.title}`,callback_data:`a_lesson_${l._id}`}]),paginationRow(page,pages,'a_lessons'),adminBack[0]];
     await ctx.answerCbQuery().catch(()=>{}); return ctx.editMessageText(`🎓 مدیریت آموزش‌ها | ${total} مورد`,{reply_markup:{inline_keyboard:rows}}).catch(()=>ctx.reply('🎓 مدیریت آموزش‌ها',{reply_markup:{inline_keyboard:rows}}));
   });
-  bot.action(/^a_lesson_(.+)$/, async ctx => { if (!(await guard(ctx,'lessons'))) return; await ctx.answerCbQuery(); const l=await AiLesson.findById(ctx.match[1]); if(!l)return; return ctx.editMessageText(`🎓 <b>${escapeHtml(l.title)}</b>\n\n${escapeHtml(l.content)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✏️ ویرایش',callback_data:`a_lesson_edit_${l._id}`},{text:'🗑 حذف',callback_data:`a_lesson_del_${l._id}`,style:'danger'}],adminBack[0]]}}); });
+  bot.action(/^a_lesson_([a-f0-9]{24})$/, async ctx => { if (!(await guard(ctx,'lessons'))) return; await ctx.answerCbQuery(); const l=await AiLesson.findById(ctx.match[1]); if(!l)return; return ctx.editMessageText(`🎓 <b>${escapeHtml(l.title)}</b>\n\n${escapeHtml(l.content)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✏️ ویرایش',callback_data:`a_lesson_edit_${l._id}`},{text:'🗑 حذف',callback_data:`a_lesson_del_${l._id}`,style:'danger'}],adminBack[0]]}}); });
   bot.action(/^a_lesson_edit_(.+)$/, async ctx=>{ if(!(await guard(ctx,'lessons')))return; const l=await AiLesson.findById(ctx.match[1]); setState(ctx.from.id,'admin_lesson',{step:'title',mode:'edit',id:l._id,data:l.toObject()}); await ctx.answerCbQuery(); return ctx.reply('عنوان جدید را بفرست یا «همان» بنویس.'); });
   bot.action(/^a_lesson_del_(.+)$/, async ctx=>{ if(!(await guard(ctx,'lessons')))return; await AiLesson.findByIdAndDelete(ctx.match[1]); await ctx.answerCbQuery('حذف شد.'); return showAdmin(ctx); });
   bot.action('a_lesson_add', async ctx=>{ if(!(await guard(ctx,'lessons')))return; setState(ctx.from.id,'admin_lesson',{step:'title',data:{}}); await ctx.answerCbQuery(); return ctx.reply('عنوان آموزش را بفرست.'); });
 
   bot.action(/^a_requests_(\d+)$/, ctx => listGeneric(ctx, PromptRequest, {}, Number(ctx.match[1]), 'a_requests', r => [{text:`${r.status==='approved'?'✅':r.status==='rejected'?'❌':'⏳'} ${String(r.text).slice(0,35)}`,callback_data:`a_request_${r._id}`}], 'requests'));
-  bot.action(/^a_request_(.+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; await ctx.answerCbQuery(); const r=await PromptRequest.findById(ctx.match[1]); if(!r)return; return ctx.editMessageText(`📝 <b>درخواست</b>\n\n${escapeHtml(r.text)}\n\nوضعیت: ${r.status}\nتاریخ: ${formatDateTime(r.createdAt)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✅ تأیید',callback_data:`req_approve_${r._id}`,style:'success'},{text:'❌ رد',callback_data:`req_reject_${r._id}`,style:'danger'}],[{text:'✏️ ویرایش متن',callback_data:`req_edit_${r._id}`},{text:'🗑 حذف',callback_data:`req_delete_${r._id}`}],adminBack[0]]}}); });
+  bot.action(/^a_request_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; await ctx.answerCbQuery(); const r=await PromptRequest.findById(ctx.match[1]); if(!r)return; return ctx.editMessageText(`📝 <b>درخواست</b>\n\n${escapeHtml(r.text)}\n\nوضعیت: ${r.status}\nتاریخ: ${formatDateTime(r.createdAt)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✅ تأیید',callback_data:`req_approve_${r._id}`,style:'success'},{text:'❌ رد',callback_data:`req_reject_${r._id}`,style:'danger'}],[{text:'✏️ ویرایش متن',callback_data:`req_edit_${r._id}`},{text:'🗑 حذف',callback_data:`req_delete_${r._id}`}],adminBack[0]]}}); });
   bot.action(/^req_(approve|reject)_(.+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const status=ctx.match[1]==='approve'?'approved':'rejected'; await PromptRequest.findByIdAndUpdate(ctx.match[2],{status,reviewedBy:ctx.from.id,reviewedAt:new Date()}); await ctx.answerCbQuery('ثبت شد.'); return showAdmin(ctx); });
   bot.action(/^req_delete_(.+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; await PromptRequest.findByIdAndDelete(ctx.match[1]); await ctx.answerCbQuery('حذف شد.'); return showAdmin(ctx); });
   bot.action(/^req_edit_(.+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; setState(ctx.from.id,'request_edit',{id:ctx.match[1]}); await ctx.answerCbQuery(); return ctx.reply('متن جدید درخواست را بفرست.'); });
 
   bot.action(/^a_payments_(\d+)$/, ctx => listGeneric(ctx, Payment, {}, Number(ctx.match[1]), 'a_payments', p => [{text:`${p.status==='approved'?'✅':p.status==='rejected'?'❌':'⏳'} ${p.paymentCode} | ${formatToman(p.finalPrice)}`,callback_data:`a_payment_${p._id}`}], 'payments'));
-  bot.action(/^a_payment_(.+)$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; await ctx.answerCbQuery(); const p=await Payment.findById(ctx.match[1]); const u=await User.findOne({telegramId:p.userTelegramId}); return ctx.editMessageText(`💳 <b>${p.paymentCode}</b>\n\n👤 ${escapeHtml(u?.firstName||'کاربر')} ${u?.username?`(@${escapeHtml(u.username)})`:''}\n🆔 <code>${p.userTelegramId}</code>\nنوع: ${p.type}\nمبلغ: ${formatToman(p.finalPrice)}\nتاریخ: ${formatDateTime(p.createdAt)}\nوضعیت: ${p.status}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:adminBack}}); });
+  bot.action(/^a_payment_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; await ctx.answerCbQuery(); const p=await Payment.findById(ctx.match[1]); const u=await User.findOne({telegramId:p.userTelegramId}); return ctx.editMessageText(`💳 <b>${p.paymentCode}</b>\n\n👤 ${escapeHtml(u?.firstName||'کاربر')} ${u?.username?`(@${escapeHtml(u.username)})`:''}\n🆔 <code>${p.userTelegramId}</code>\nنوع: ${p.type}\nمبلغ: ${formatToman(p.finalPrice)}\nتاریخ: ${formatDateTime(p.createdAt)}\nوضعیت: ${p.status}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:adminBack}}); });
 
   bot.action(/^pay_approve_(.+)$/, async ctx => { if (!(await guard(ctx,'payments'))) return; await ctx.answerCbQuery(); const p=await Payment.findById(ctx.match[1]); if(!p||p.status!=='pending')return;
     p.status='approved';p.reviewedBy=ctx.from.id;p.reviewedAt=new Date();await p.save(); let message='✅ پرداخت تأیید شد.';
@@ -227,10 +228,41 @@ function registerAdminHandlers(bot) {
 
   bot.action('a_admins',async ctx=>{if(!isOwner(ctx.from.id))return ctx.answerCbQuery('فقط مالک.');const rows=await Admin.find().sort({createdAt:-1});await ctx.answerCbQuery();const buttons=rows.map(a=>[{text:`${a.isActive?'✅':'❌'} ${a.telegramId} | ${a.title}`,callback_data:`a_admin_${a._id}`}]);buttons.unshift([{text:'➕ افزودن ادمین',callback_data:'a_admin_add',style:'success'}]);buttons.push(adminBack[0]);return ctx.editMessageText(`🛡 مدیریت ادمین‌ها\n\n${rows.length} ادمین ثبت شده.`,{reply_markup:{inline_keyboard:buttons}});});
   bot.action('a_admin_add',async ctx=>{if(!isOwner(ctx.from.id))return;setState(ctx.from.id,'admin_add',{step:'id',data:{}});await ctx.answerCbQuery();return ctx.reply('آیدی عددی ادمین را بفرست.');});
-  bot.action(/^a_admin_(.+)$/,async ctx=>{if(!isOwner(ctx.from.id))return;const a=await Admin.findById(ctx.match[1]);if(!a)return;await ctx.answerCbQuery();const enabled=Object.entries(a.permissions.toObject?a.permissions.toObject():a.permissions).filter(([,v])=>v).map(([k])=>k).join(', ')||'بدون دسترسی';return ctx.editMessageText(`🛡 ${a.telegramId}\nعنوان: ${a.title}\nوضعیت: ${a.isActive?'فعال':'غیرفعال'}\nمجوزها: ${enabled}`,{reply_markup:{inline_keyboard:[[{text:'✏️ تغییر مجوزها',callback_data:`a_admin_perms_${a._id}`}],[{text:a.isActive?'⏸ غیرفعال':'▶️ فعال',callback_data:`a_admin_toggle_${a._id}`}],[{text:'🗑 حذف ادمین',callback_data:`a_admin_delete_${a._id}`,style:'danger'}],adminBack[0]]}});});
-  bot.action(/^a_admin_perms_(.+)$/,async ctx=>{if(!isOwner(ctx.from.id))return;setState(ctx.from.id,'admin_edit_perms',{id:ctx.match[1]});await ctx.answerCbQuery();return ctx.reply('مجوزهای جدید را با ویرگول بفرست؛ مثال: prompts,lessons یا all');});
-  bot.action(/^a_admin_toggle_(.+)$/,async ctx=>{if(!isOwner(ctx.from.id))return;const a=await Admin.findById(ctx.match[1]);if(a){a.isActive=!a.isActive;await a.save();}await ctx.answerCbQuery('تغییر کرد.');return showAdmin(ctx);});
-  bot.action(/^a_admin_delete_(.+)$/,async ctx=>{if(!isOwner(ctx.from.id))return;await Admin.findByIdAndDelete(ctx.match[1]);await ctx.answerCbQuery('حذف شد.');return showAdmin(ctx);});
+  bot.action(/^a_admin_([a-f0-9]{24})$/,async ctx=>{if(!isOwner(ctx.from.id))return;const a=await Admin.findById(ctx.match[1]);if(!a)return;await ctx.answerCbQuery();const enabled=Object.entries(a.permissions.toObject?a.permissions.toObject():a.permissions).filter(([,v])=>v).map(([k])=>k).join(', ')||'بدون دسترسی';return ctx.editMessageText(`🛡 ${a.telegramId}\nعنوان: ${a.title}\nوضعیت: ${a.isActive?'فعال':'غیرفعال'}\nمجوزها: ${enabled}`,{reply_markup:{inline_keyboard:[[{text:'✏️ تغییر مجوزها',callback_data:`a_admin_perms_${a._id}`}],[{text:a.isActive?'⏸ غیرفعال':'▶️ فعال',callback_data:`a_admin_toggle_${a._id}`}],[{text:'🗑 حذف ادمین',callback_data:`a_admin_delete_${a._id}`,style:'danger'}],adminBack[0]]}});});
+  bot.action(/^a_admin_perms_([a-f0-9]{24})$/,async ctx=>{if(!isOwner(ctx.from.id))return;setState(ctx.from.id,'admin_edit_perms',{id:ctx.match[1]});await ctx.answerCbQuery();return ctx.reply('مجوزهای جدید را با ویرگول بفرست؛ مثال: prompts,lessons یا all');});
+  bot.action(/^a_admin_toggle_([a-f0-9]{24})$/,async ctx=>{if(!isOwner(ctx.from.id))return;const a=await Admin.findById(ctx.match[1]);if(a){a.isActive=!a.isActive;await a.save();}await ctx.answerCbQuery('تغییر کرد.');return showAdmin(ctx);});
+  bot.action(/^a_admin_delete_([a-f0-9]{24})$/, async ctx => {
+    if (!isOwner(ctx.from.id)) return ctx.answerCbQuery('فقط مالک اجازه حذف ادمین را دارد.', { show_alert: true });
+    const admin = await Admin.findById(ctx.match[1]);
+    if (!admin) return ctx.answerCbQuery('ادمین پیدا نشد.', { show_alert: true });
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(
+      `⚠️ <b>حذف ادمین</b>
+
+آیدی: <code>${admin.telegramId}</code>
+عنوان: ${escapeHtml(admin.title || 'ادمین')}
+
+از حذف این ادمین مطمئنی؟`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ بله، حذف شود', callback_data: `a_admin_delete_confirm_${admin._id}`, style: 'danger' }],
+            [{ text: '🔙 انصراف', callback_data: `a_admin_${admin._id}` }]
+          ]
+        }
+      }
+    );
+  });
+
+  bot.action(/^a_admin_delete_confirm_([a-f0-9]{24})$/, async ctx => {
+    if (!isOwner(ctx.from.id)) return ctx.answerCbQuery('فقط مالک.', { show_alert: true });
+    const admin = await Admin.findByIdAndDelete(ctx.match[1]);
+    if (!admin) return ctx.answerCbQuery('ادمین قبلاً حذف شده یا وجود ندارد.', { show_alert: true });
+    await audit(ctx.from.id, 'admin_delete', 'Admin', admin._id);
+    await ctx.answerCbQuery('ادمین حذف شد.');
+    return showAdmin(ctx);
+  });
 
   bot.action('a_broadcast',async ctx=>{if(!(await guard(ctx,'broadcast')))return;setState(ctx.from.id,'broadcast',{step:'message'});await ctx.answerCbQuery();return ctx.reply('پیام نهایی را بفرست؛ بعد پیش‌نمایش و تأیید می‌گیری.');});
   bot.action('broadcast_confirm',async ctx=>{if(!(await guard(ctx,'broadcast')))return;const state=getState(ctx.from.id);if(!state||state.type!=='broadcast_preview')return;const users=await User.find({isBlocked:false});let ok=0,fail=0;for(const u of users){try{await ctx.telegram.copyMessage(u.telegramId,state.data.chatId,state.data.messageId);ok++;}catch{fail++;}}clearState(ctx.from.id);await ctx.answerCbQuery();return ctx.reply(`✅ ارسال شد\nموفق: ${ok}\nناموفق: ${fail}`);});
@@ -336,6 +368,62 @@ function registerAdminHandlers(bot) {
     return ctx.reply(`✅ پست با موفقیت منتشر شد.\n\n🔗 ${postUrl}\n🧩 تعداد دکمه‌ها: ${(d.buttonRows||[]).flat().length}`);
   });
 
+  async function skipPromptStep(ctx, expectedStep, nextStep, mutate, replyText, extra = {}) {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const state = getState(ctx.from.id);
+    if (!state || state.type !== 'admin_prompt' || state.data?.step !== expectedStep) {
+      return ctx.answerCbQuery('این مرحله دیگر فعال نیست.', { show_alert: true });
+    }
+    const flow = state.data;
+    const draft = flow.data || (flow.data = {});
+    mutate(draft);
+    flow.step = nextStep;
+    setState(ctx.from.id, 'admin_prompt', flow);
+    await ctx.answerCbQuery('این مرحله رد شد.');
+    return ctx.reply(replyText, extra);
+  }
+
+  bot.action('prompt_skip_tip', ctx => skipPromptStep(
+    ctx,
+    'tip',
+    'tools',
+    draft => { draft.usageTip = null; },
+    `🧪 ابزارهای تست‌شده را با ویرگول بنویس.\nمثال: <code>Gemini, ChatGPT</code>`,
+    { parse_mode: 'HTML' }
+  ));
+
+  bot.action('prompt_skip_post', ctx => skipPromptStep(
+    ctx,
+    'post',
+    'image',
+    draft => { draft.channelPostUrl = null; },
+    `🖼 <b>تصویر نمونه</b>\n\nیک تصویر بفرست تا همراه پرامپت نمایش داده شود.`,
+    { parse_mode: 'HTML', reply_markup: promptSkipKeyboard('image') }
+  ));
+
+  bot.action('prompt_skip_image', async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const state = getState(ctx.from.id);
+    if (!state || state.type !== 'admin_prompt' || state.data?.step !== 'image') {
+      return ctx.answerCbQuery('این مرحله دیگر فعال نیست.', { show_alert: true });
+    }
+    const flow = state.data;
+    const draft = flow.data || (flow.data = {});
+    draft.imageFileId = null;
+    flow.step = 'confirm';
+    setState(ctx.from.id, 'admin_prompt', flow);
+    await ctx.answerCbQuery('بدون تصویر ادامه می‌دهیم.');
+    return ctx.reply(promptPreview(draft), {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '✅ تأیید و ثبت', callback_data: 'prompt_confirm', style: 'success' }],
+          [{ text: '❌ لغو', callback_data: 'cancel_input', style: 'danger' }]
+        ]
+      }
+    });
+  });
+
   bot.action(/^support_reply_(.+)$/,async ctx=>{if(!isOwner(ctx.from.id))return;setState(ctx.from.id,'support_reply',{ticketId:ctx.match[1]});await ctx.answerCbQuery();return ctx.reply('پاسخ را بنویس.');});
 
   bot.on('message', async (ctx,next)=>{
@@ -370,7 +458,7 @@ function registerAdminHandlers(bot) {
         if (text !== 'همان') draft.promptText = text;
         flow.step = 'tip';
         setState(ctx.from.id, 'admin_prompt', flow);
-        return ctx.reply('💡 نکته استفاده بهتر را بنویس.\nمثال: «نام Sara را با نام دلخواهت جایگزین کن.»\nاگر نکته‌ای نداری «ندارد» بفرست.');
+        return ctx.reply('💡 نکته استفاده بهتر را بنویس.\nمثال: «نام Sara را با نام دلخواهت جایگزین کن.»', { reply_markup: promptSkipKeyboard('tip') });
       }
 
       if (step === 'tip') {
@@ -386,7 +474,7 @@ function registerAdminHandlers(bot) {
         if (text !== 'همان') draft.tools = text.split(/[,،]/).map(x => x.trim()).filter(Boolean);
         flow.step = 'post';
         setState(ctx.from.id, 'admin_prompt', flow);
-        return ctx.reply('🔗 <b>لینک پست اصلی کانال</b>\n\nاگر این پرامپت قبلاً در کانال منتشر شده، لینک همان پست را بفرست.\nمثال: <code>https://t.me/SiniorAi/125</code>\n\nاگر هنوز پستی نداری «ندارد» بفرست.', { parse_mode: 'HTML' });
+        return ctx.reply('🔗 <b>لینک پست اصلی کانال</b>\n\nاگر این پرامپت قبلاً در کانال منتشر شده، لینک همان پست را بفرست.\nمثال: <code>https://t.me/SiniorAi/125</code>', { parse_mode: 'HTML', reply_markup: promptSkipKeyboard('post') });
       }
 
       if (step === 'post') {
@@ -399,7 +487,7 @@ function registerAdminHandlers(bot) {
         }
         flow.step = 'image';
         setState(ctx.from.id, 'admin_prompt', flow);
-        return ctx.reply('🖼 <b>تصویر نمونه</b>\n\nیک تصویر بفرست تا همراه پرامپت نمایش داده شود.\nاگر تصویر نمی‌خواهی «بدون تصویر» بنویس.', { parse_mode: 'HTML' });
+        return ctx.reply('🖼 <b>تصویر نمونه</b>\n\nیک تصویر بفرست تا همراه پرامپت نمایش داده شود.', { parse_mode: 'HTML', reply_markup: promptSkipKeyboard('image') });
       }
 
       if (step === 'image') {
