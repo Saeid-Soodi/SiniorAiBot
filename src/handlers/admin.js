@@ -112,11 +112,121 @@ async function listGeneric(ctx, Model, query, page, prefix, render, permission) 
 function registerAdminHandlers(bot) {
   bot.command('admin', showAdmin); bot.hears('🛠 پنل ادمین', showAdmin); bot.action('open_admin', showAdmin); bot.action('admin_home', showAdmin);
 
-  bot.action('a_prompt_add', async ctx => { if (!(await guard(ctx,'prompts'))) return; await ctx.answerCbQuery(); setState(ctx.from.id, 'admin_prompt', { step: 'title', data: {} }); return ctx.reply('➕ <b>افزودن پرامپت</b>\n\nعنوان نمایشی را بفرست.\nمثال: دختر تابستانی در ساحل', { parse_mode: 'HTML', reply_markup: { inline_keyboard: adminBack } }); });
-  bot.action(/^a_prompts_(\d+)$/, ctx => listGeneric(ctx, Prompt, {}, Number(ctx.match[1]), 'a_prompts', p => [{ text: `✨ ${p.title}`, callback_data: `a_prompt_${p._id}` }], 'prompts'));
-  bot.action(/^a_prompt_([a-f0-9]{24})$/, async ctx => { if (!(await guard(ctx,'prompts'))) return; await ctx.answerCbQuery(); const p = await Prompt.findById(ctx.match[1]); if (!p) return; return ctx.editMessageText(promptPreview(p), { parse_mode:'HTML', reply_markup:{ inline_keyboard:[[{text:'✏️ ویرایش',callback_data:`a_prompt_edit_${p._id}`},{text:'🗑 حذف',callback_data:`a_prompt_del_${p._id}`,style:'danger'}],[{text:'🔗 لینک دریافت',url:`https://t.me/${env.botUsername}?start=prompt_${p.slug}`}],adminBack[0]] } }).catch(()=>{}); });
-  bot.action(/^a_prompt_edit_(.+)$/, async ctx => { if (!(await guard(ctx,'prompts'))) return; await ctx.answerCbQuery(); const p=await Prompt.findById(ctx.match[1]); setState(ctx.from.id,'admin_prompt',{step:'title',mode:'edit',promptId:p._id,data:p.toObject()}); return ctx.reply('ویرایش شروع شد. عنوان را بفرست یا «همان» بنویس.',{reply_markup:{inline_keyboard:adminBack}}); });
-  bot.action(/^a_prompt_del_(.+)$/, async ctx => { if (!(await guard(ctx,'prompts'))) return; await Prompt.findByIdAndUpdate(ctx.match[1],{isActive:false}); await audit(ctx.from.id,'prompt_soft_delete','Prompt',ctx.match[1]); await ctx.answerCbQuery('غیرفعال شد.'); return showAdmin(ctx); });
+  bot.action('a_prompt_add', async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    await ctx.answerCbQuery();
+    setState(ctx.from.id, 'admin_prompt', { step: 'title', data: {} });
+    return ctx.reply('➕ <b>افزودن پرامپت</b>\n\nعنوان نمایشی را بفرست.\nمثال: دختر تابستانی در ساحل', {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: adminBack }
+    });
+  });
+
+  bot.action(/^a_prompts_(\d+)$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const page = Number(ctx.match[1]);
+    const query = { isDeleted: { $ne: true } };
+    const total = await Prompt.countDocuments(query);
+    const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const current = Math.min(Math.max(page, 1), pages);
+    const items = await Prompt.find(query).sort({ createdAt: -1 }).skip((current - 1) * PAGE_SIZE).limit(PAGE_SIZE);
+    const rows = [
+      [{ text: '➕ افزودن پرامپت', callback_data: 'a_prompt_add', style: 'success' }],
+      ...items.map(item => [{ text: `${item.isActive ? '✨' : '⏸'} ${item.title}`, callback_data: `a_prompt_${item._id}` }]),
+      paginationRow(current, pages, 'a_prompts'),
+      [{ text: '🗑 پرامپت‌های حذف‌شده', callback_data: 'a_prompts_deleted_1' }],
+      adminBack[0]
+    ];
+    await ctx.answerCbQuery().catch(() => {});
+    return ctx.editMessageText(`📚 <b>مدیریت پرامپت‌ها</b>\n\nتعداد: ${total}`, {
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: rows }
+    }).catch(() => ctx.reply(`📚 مدیریت پرامپت‌ها | ${total} مورد`, { reply_markup: { inline_keyboard: rows } }));
+  });
+
+  bot.action(/^a_prompt_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const prompt = await Prompt.findOne({ _id: ctx.match[1], isDeleted: { $ne: true } });
+    if (!prompt) return ctx.answerCbQuery('پرامپت پیدا نشد یا حذف شده است.', { show_alert: true });
+    await ctx.answerCbQuery();
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '✏️ ویرایش', callback_data: `a_prompt_edit_${prompt._id}` }, { text: '🗑 حذف', callback_data: `a_prompt_delete_${prompt._id}`, style: 'danger' }],
+        [{ text: '🔗 لینک دریافت', url: `https://t.me/${env.botUsername}?start=prompt_${prompt.slug}` }],
+        [{ text: '🔙 بازگشت به پرامپت‌ها', callback_data: 'a_prompts_1' }, { text: '🏠 منوی اصلی پنل', callback_data: 'admin_home' }]
+      ]
+    };
+    return ctx.editMessageText(promptPreview(prompt), { parse_mode: 'HTML', reply_markup: keyboard })
+      .catch(() => ctx.reply(promptPreview(prompt), { parse_mode: 'HTML', reply_markup: keyboard }));
+  });
+
+  bot.action(/^a_prompt_edit_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const prompt = await Prompt.findOne({ _id: ctx.match[1], isDeleted: { $ne: true } });
+    if (!prompt) return ctx.answerCbQuery('پرامپت پیدا نشد.', { show_alert: true });
+    await ctx.answerCbQuery();
+    setState(ctx.from.id, 'admin_prompt', { step: 'title', mode: 'edit', promptId: prompt._id, data: prompt.toObject() });
+    return ctx.reply('✏️ ویرایش شروع شد.\n\nعنوان جدید را بفرست یا «همان» بنویس تا مقدار فعلی حفظ شود.', {
+      reply_markup: { inline_keyboard: [[{ text: '❌ لغو عملیات', callback_data: 'cancel_input', style: 'danger' }], [{ text: '🔙 بازگشت به پرامپت‌ها', callback_data: 'a_prompts_1' }]] }
+    });
+  });
+
+  bot.action(/^a_prompt_delete_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const prompt = await Prompt.findOne({ _id: ctx.match[1], isDeleted: { $ne: true } });
+    if (!prompt) return ctx.answerCbQuery('پرامپت پیدا نشد.', { show_alert: true });
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(
+      `🗑 <b>حذف پرامپت</b>\n\nعنوان: ${escapeHtml(prompt.title)}\nاسلاگ: <code>${escapeHtml(prompt.slug)}</code>\n\nپرامپت از دسترس کاربران خارج می‌شود، اما برای بازیابی در آرشیو باقی می‌ماند.\n\nاز حذف مطمئنی؟`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '✅ بله، حذف شود', callback_data: `a_prompt_delete_confirm_${prompt._id}`, style: 'danger' }], [{ text: '❌ انصراف', callback_data: `a_prompt_${prompt._id}` }]] } }
+    );
+  });
+
+  bot.action(/^a_prompt_delete_confirm_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const prompt = await Prompt.findOneAndUpdate(
+      { _id: ctx.match[1], isDeleted: { $ne: true } },
+      { isDeleted: true, isActive: false, deletedAt: new Date(), deletedBy: ctx.from.id },
+      { new: true }
+    );
+    if (!prompt) return ctx.answerCbQuery('پرامپت قبلاً حذف شده یا پیدا نشد.', { show_alert: true });
+    await audit(ctx.from.id, 'prompt_soft_delete', 'Prompt', prompt._id);
+    await ctx.answerCbQuery('پرامپت حذف شد.');
+    return ctx.editMessageText('✅ پرامپت حذف شد و به آرشیو منتقل شد.', {
+      reply_markup: { inline_keyboard: [[{ text: '📚 بازگشت به مدیریت پرامپت‌ها', callback_data: 'a_prompts_1' }], [{ text: '🏠 منوی اصلی پنل', callback_data: 'admin_home' }]] }
+    });
+  });
+
+  bot.action(/^a_prompts_deleted_(\d+)$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const page = Number(ctx.match[1]);
+    const query = { isDeleted: true };
+    const total = await Prompt.countDocuments(query);
+    const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const current = Math.min(Math.max(page, 1), pages);
+    const items = await Prompt.find(query).sort({ deletedAt: -1, createdAt: -1 }).skip((current - 1) * PAGE_SIZE).limit(PAGE_SIZE);
+    const rows = items.map(item => [{ text: `♻️ ${item.title}`, callback_data: `a_prompt_restore_${item._id}` }]);
+    rows.push(paginationRow(current, pages, 'a_prompts_deleted'));
+    rows.push([{ text: '🔙 بازگشت به پرامپت‌ها', callback_data: 'a_prompts_1' }]);
+    await ctx.answerCbQuery().catch(() => {});
+    return ctx.editMessageText(`🗑 <b>پرامپت‌های حذف‌شده</b>\n\nتعداد: ${total}\nبرای بازیابی روی هر مورد بزن.`, {
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: rows }
+    }).catch(() => ctx.reply(`🗑 پرامپت‌های حذف‌شده | ${total} مورد`, { reply_markup: { inline_keyboard: rows } }));
+  });
+
+  bot.action(/^a_prompt_restore_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const prompt = await Prompt.findOneAndUpdate(
+      { _id: ctx.match[1], isDeleted: true },
+      { isDeleted: false, isActive: true, deletedAt: null, deletedBy: null },
+      { new: true }
+    );
+    if (!prompt) return ctx.answerCbQuery('پرامپت حذف‌شده پیدا نشد.', { show_alert: true });
+    await audit(ctx.from.id, 'prompt_restore', 'Prompt', prompt._id);
+    await ctx.answerCbQuery('بازیابی شد.');
+    return ctx.editMessageText(`✅ «${escapeHtml(prompt.title)}» بازیابی و فعال شد.`, {
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '📚 مدیریت پرامپت‌ها', callback_data: 'a_prompts_1' }], [{ text: '🗑 آرشیو حذف‌شده‌ها', callback_data: 'a_prompts_deleted_1' }]] }
+    });
+  });
 
   bot.action(/^a_lessons_(\d+)$/, async ctx => {
     if (!(await guard(ctx,'lessons'))) return;
@@ -126,29 +236,29 @@ function registerAdminHandlers(bot) {
     await ctx.answerCbQuery().catch(()=>{}); return ctx.editMessageText(`🎓 مدیریت آموزش‌ها | ${total} مورد`,{reply_markup:{inline_keyboard:rows}}).catch(()=>ctx.reply('🎓 مدیریت آموزش‌ها',{reply_markup:{inline_keyboard:rows}}));
   });
   bot.action(/^a_lesson_([a-f0-9]{24})$/, async ctx => { if (!(await guard(ctx,'lessons'))) return; await ctx.answerCbQuery(); const l=await AiLesson.findById(ctx.match[1]); if(!l)return; return ctx.editMessageText(`🎓 <b>${escapeHtml(l.title)}</b>\n\n${escapeHtml(l.content)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✏️ ویرایش',callback_data:`a_lesson_edit_${l._id}`},{text:'🗑 حذف',callback_data:`a_lesson_del_${l._id}`,style:'danger'}],adminBack[0]]}}); });
-  bot.action(/^a_lesson_edit_(.+)$/, async ctx=>{ if(!(await guard(ctx,'lessons')))return; const l=await AiLesson.findById(ctx.match[1]); setState(ctx.from.id,'admin_lesson',{step:'title',mode:'edit',id:l._id,data:l.toObject()}); await ctx.answerCbQuery(); return ctx.reply('عنوان جدید را بفرست یا «همان» بنویس.'); });
-  bot.action(/^a_lesson_del_(.+)$/, async ctx=>{ if(!(await guard(ctx,'lessons')))return; await AiLesson.findByIdAndDelete(ctx.match[1]); await ctx.answerCbQuery('حذف شد.'); return showAdmin(ctx); });
+  bot.action(/^a_lesson_edit_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'lessons')))return; const l=await AiLesson.findById(ctx.match[1]); setState(ctx.from.id,'admin_lesson',{step:'title',mode:'edit',id:l._id,data:l.toObject()}); await ctx.answerCbQuery(); return ctx.reply('عنوان جدید را بفرست یا «همان» بنویس.'); });
+  bot.action(/^a_lesson_del_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'lessons')))return; const lesson=await AiLesson.findByIdAndDelete(ctx.match[1]); if(!lesson)return ctx.answerCbQuery('آموزش پیدا نشد.',{show_alert:true}); await ctx.answerCbQuery('حذف شد.'); return ctx.editMessageText('✅ آموزش حذف شد.',{reply_markup:{inline_keyboard:[[{text:'🎓 بازگشت به آموزش‌ها',callback_data:'a_lessons_1'}],adminBack[0]]}}); });
   bot.action('a_lesson_add', async ctx=>{ if(!(await guard(ctx,'lessons')))return; setState(ctx.from.id,'admin_lesson',{step:'title',data:{}}); await ctx.answerCbQuery(); return ctx.reply('عنوان آموزش را بفرست.'); });
 
   bot.action(/^a_requests_(\d+)$/, ctx => listGeneric(ctx, PromptRequest, {}, Number(ctx.match[1]), 'a_requests', r => [{text:`${r.status==='approved'?'✅':r.status==='rejected'?'❌':'⏳'} ${String(r.text).slice(0,35)}`,callback_data:`a_request_${r._id}`}], 'requests'));
   bot.action(/^a_request_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; await ctx.answerCbQuery(); const r=await PromptRequest.findById(ctx.match[1]); if(!r)return; return ctx.editMessageText(`📝 <b>درخواست</b>\n\n${escapeHtml(r.text)}\n\nوضعیت: ${r.status}\nتاریخ: ${formatDateTime(r.createdAt)}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'✅ تأیید',callback_data:`req_approve_${r._id}`,style:'success'},{text:'❌ رد',callback_data:`req_reject_${r._id}`,style:'danger'}],[{text:'✏️ ویرایش متن',callback_data:`req_edit_${r._id}`},{text:'🗑 حذف',callback_data:`req_delete_${r._id}`}],adminBack[0]]}}); });
-  bot.action(/^req_(approve|reject)_(.+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const status=ctx.match[1]==='approve'?'approved':'rejected'; await PromptRequest.findByIdAndUpdate(ctx.match[2],{status,reviewedBy:ctx.from.id,reviewedAt:new Date()}); await ctx.answerCbQuery('ثبت شد.'); return showAdmin(ctx); });
-  bot.action(/^req_delete_(.+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; await PromptRequest.findByIdAndDelete(ctx.match[1]); await ctx.answerCbQuery('حذف شد.'); return showAdmin(ctx); });
-  bot.action(/^req_edit_(.+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; setState(ctx.from.id,'request_edit',{id:ctx.match[1]}); await ctx.answerCbQuery(); return ctx.reply('متن جدید درخواست را بفرست.'); });
+  bot.action(/^req_(approve|reject)_(.+)$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const status=ctx.match[1]==='approve'?'approved':'rejected'; await PromptRequest.findByIdAndUpdate(ctx.match[2],{status,reviewedBy:ctx.from.id,reviewedAt:new Date()}); await ctx.answerCbQuery('ثبت شد.'); return ctx.editMessageText('✅ وضعیت درخواست به‌روزرسانی شد.',{reply_markup:{inline_keyboard:[[{text:'📝 بازگشت به درخواست‌ها',callback_data:'a_requests_1'}],adminBack[0]]}}); });
+  bot.action(/^req_delete_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; const request=await PromptRequest.findByIdAndDelete(ctx.match[1]); if(!request)return ctx.answerCbQuery('درخواست پیدا نشد.',{show_alert:true}); await ctx.answerCbQuery('حذف شد.'); return ctx.editMessageText('✅ درخواست حذف شد.',{reply_markup:{inline_keyboard:[[{text:'📝 بازگشت به درخواست‌ها',callback_data:'a_requests_1'}],adminBack[0]]}}); });
+  bot.action(/^req_edit_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'requests')))return; setState(ctx.from.id,'request_edit',{id:ctx.match[1]}); await ctx.answerCbQuery(); return ctx.reply('متن جدید درخواست را بفرست.'); });
 
   bot.action(/^a_payments_(\d+)$/, ctx => listGeneric(ctx, Payment, {}, Number(ctx.match[1]), 'a_payments', p => [{text:`${p.status==='approved'?'✅':p.status==='rejected'?'❌':'⏳'} ${p.paymentCode} | ${formatToman(p.finalPrice)}`,callback_data:`a_payment_${p._id}`}], 'payments'));
   bot.action(/^a_payment_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; await ctx.answerCbQuery(); const p=await Payment.findById(ctx.match[1]); const u=await User.findOne({telegramId:p.userTelegramId}); return ctx.editMessageText(`💳 <b>${p.paymentCode}</b>\n\n👤 ${escapeHtml(u?.firstName||'کاربر')} ${u?.username?`(@${escapeHtml(u.username)})`:''}\n🆔 <code>${p.userTelegramId}</code>\nنوع: ${p.type}\nمبلغ: ${formatToman(p.finalPrice)}\nتاریخ: ${formatDateTime(p.createdAt)}\nوضعیت: ${p.status}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:adminBack}}); });
 
-  bot.action(/^pay_approve_(.+)$/, async ctx => { if (!(await guard(ctx,'payments'))) return; await ctx.answerCbQuery(); const p=await Payment.findById(ctx.match[1]); if(!p||p.status!=='pending')return;
+  bot.action(/^pay_approve_([a-f0-9]{24})$/, async ctx => { if (!(await guard(ctx,'payments'))) return; await ctx.answerCbQuery(); const p=await Payment.findById(ctx.match[1]); if(!p||p.status!=='pending')return;
     p.status='approved';p.reviewedBy=ctx.from.id;p.reviewedAt=new Date();await p.save(); let message='✅ پرداخت تأیید شد.';
     if(p.type==='wallet_topup'){ await creditWallet(p.userTelegramId,p.finalPrice,{referenceId:p._id,createdBy:ctx.from.id}); message=`✅ کیف پولت ${formatToman(p.finalPrice)} شارژ شد.`; }
     else if(p.type==='gift_purchase'){ const gift=await createGift({buyerTelegramId:p.userTelegramId,paymentId:p._id,vipDays:env.vipDays}); const link=`https://t.me/${env.botUsername}?start=gift_${gift.code}`; message=`🎁 پرداخت هدیه تأیید شد. لینک یک‌بارمصرف هدیه:\n${link}`; }
     else { const user=await activateOrExtendVip(p.userTelegramId,env.vipDays); message=`👑 پرداخت تأیید شد. VIP تا ${user.vipUntil.toLocaleDateString('fa-IR')} فعال است.`; }
     await consumeCode(p.discountCode,p.userTelegramId); await ctx.telegram.sendMessage(p.userTelegramId,message).catch(()=>{}); await audit(ctx.from.id,'payment_approve','Payment',p._id,{type:p.type}); return ctx.editMessageCaption(`✅ پرداخت تأیید شد\n${p.paymentCode}\n${message}`).catch(()=>ctx.reply(message)); });
-  bot.action(/^pay_reject_(.+)$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; const p=await Payment.findById(ctx.match[1]); if(!p||p.status!=='pending')return; p.status='rejected';p.reviewedBy=ctx.from.id;p.reviewedAt=new Date();p.rejectionReason='رد شده توسط مدیریت';await p.save(); await ctx.telegram.sendMessage(p.userTelegramId,'❌ پرداخت تأیید نشد. برای پیگیری با پشتیبانی در ارتباط باش.').catch(()=>{}); await ctx.answerCbQuery('رد شد.'); return ctx.editMessageCaption(`❌ پرداخت رد شد\n${p.paymentCode}`).catch(()=>{}); });
+  bot.action(/^pay_reject_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'payments')))return; const p=await Payment.findById(ctx.match[1]); if(!p||p.status!=='pending')return; p.status='rejected';p.reviewedBy=ctx.from.id;p.reviewedAt=new Date();p.rejectionReason='رد شده توسط مدیریت';await p.save(); await ctx.telegram.sendMessage(p.userTelegramId,'❌ پرداخت تأیید نشد. برای پیگیری با پشتیبانی در ارتباط باش.').catch(()=>{}); await ctx.answerCbQuery('رد شد.'); return ctx.editMessageCaption(`❌ پرداخت رد شد\n${p.paymentCode}`).catch(()=>{}); });
 
   bot.action(/^result_score_(.+)_([1-9]|10)$/, async ctx=>{ if(!(await guard(ctx,'results')))return; const r=await PromptResult.findById(ctx.match[1]); if(!r)return; r.status='approved';r.adminScore=Number(ctx.match[2]);r.reviewedBy=ctx.from.id;r.reviewedAt=new Date();await r.save(); await ctx.telegram.sendMessage(r.userTelegramId,`🎉 نتیجه‌ات تأیید شد و امتیاز ${r.adminScore}/10 گرفت.`).catch(()=>{}); await ctx.answerCbQuery('تأیید شد.'); return ctx.editMessageCaption(`✅ نتیجه تأیید شد | امتیاز ${r.adminScore}/10`).catch(()=>{}); });
-  bot.action(/^result_reject_(.+)$/, async ctx=>{ if(!(await guard(ctx,'results')))return; const r=await PromptResult.findByIdAndUpdate(ctx.match[1],{status:'rejected',reviewedBy:ctx.from.id,reviewedAt:new Date()},{new:true}); if(r)await ctx.telegram.sendMessage(r.userTelegramId,'❌ نتیجه ارسالی تأیید نشد.').catch(()=>{}); await ctx.answerCbQuery('رد شد.'); });
+  bot.action(/^result_reject_([a-f0-9]{24})$/, async ctx=>{ if(!(await guard(ctx,'results')))return; const r=await PromptResult.findByIdAndUpdate(ctx.match[1],{status:'rejected',reviewedBy:ctx.from.id,reviewedAt:new Date()},{new:true}); if(r)await ctx.telegram.sendMessage(r.userTelegramId,'❌ نتیجه ارسالی تأیید نشد.').catch(()=>{}); await ctx.answerCbQuery('رد شد.'); });
 
   bot.action(/^a_codes_(\d+)$/, async ctx=>{
     if(!(await guard(ctx,'discounts')))return;

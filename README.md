@@ -1,8 +1,8 @@
-# SiniorAiBot v5.3.3
+# SiniorAiBot v5.3.4
 
 این نسخه روی پایداری Wizardهای ادمین و ارسال پرامپت تمرکز دارد.
 
-## اصلاح‌های مهم v5.3.3
+## اصلاح‌های مهم v5.3.4
 
 - رفع تداخل Callbackهای عمومی و اختصاصی پنل ادمین؛ به‌خصوص حذف ادمین.
 - تأییدیه امن قبل از حذف ادمین.
@@ -85,3 +85,11 @@ npm run dev
 - Fixed channel post builder text/media/button state progression.
 - Added safer prompt validation and duplicate-slug handling.
 - Hardened the in-memory state manager with one-hour state expiration.
+
+
+## v5.3.4 final deployment review
+- Prompt deletion now uses confirmation and recoverable archive instead of silently disabling the prompt.
+- Deleted prompts can be restored from the admin panel.
+- Admin navigation after destructive actions returns to the relevant section.
+- Several callback patterns were narrowed to valid MongoDB ObjectIds to reduce accidental handler collisions.
+- Syntax checks cover all JavaScript source files.

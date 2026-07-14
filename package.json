@@ -1,8 +1,8 @@
 {
   "name": "sinioraibot",
-  "version": "5.3.3",
+  "version": "5.3.4",
   "private": true,
-  "description": "SiniorAi Telegram bot v5.3.3 with stable admin callbacks, safe prompt delivery, skip buttons, wallet, gifting and advanced channel publishing",
+  "description": "SiniorAi Telegram bot v5.3.4 release candidate with safer prompt lifecycle, admin navigation fixes, stable callbacks, wallet, gifting and channel publishing",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
