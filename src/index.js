@@ -12,6 +12,7 @@ const connectDb = require('./config/db');
 const { registerAdminHandlers } = require('./handlers/admin');
 const { registerUserHandlers } = require('./handlers/user');
 const seedLessons = require('./services/seedLessons');
+const { startChannelPostScheduler } = require('./services/channelPostService');
 
 const bot = new Telegraf(env.botToken, {
   handlerTimeout: 90_000
@@ -59,6 +60,7 @@ const server = http.createServer((req, res) => {
 });
 
 let shuttingDown = false;
+let stopChannelPostScheduler = null;
 
 async function bootstrap() {
   try {
@@ -81,6 +83,8 @@ async function bootstrap() {
       dropPendingUpdates: false
     });
 
+    stopChannelPostScheduler = startChannelPostScheduler(bot.telegram);
+    console.log('🕒 Channel post scheduler is running');
     console.log('🤖 SiniorAiBot is running');
   } catch (error) {
     console.error('❌ Startup error:', error);
@@ -100,6 +104,7 @@ async function shutdown(signal) {
   console.log(`${signal} received. Stopping application...`);
 
   try {
+    stopChannelPostScheduler?.();
     bot.stop(signal);
   } catch (error) {
     console.error('Bot shutdown error:', error);

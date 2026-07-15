@@ -37,7 +37,8 @@ const env = {
   referralDiscountPercent: num(process.env.REFERRAL_DISCOUNT_PERCENT, 50),
   referralRewardDays: num(process.env.REFERRAL_REWARD_DAYS, 7),
   minPaymentToman: num(process.env.MIN_PAYMENT_TOMAN, 10000),
-  walletHighAmountThreshold: num(process.env.WALLET_HIGH_AMOUNT_THRESHOLD, 1000000)
+  walletHighAmountThreshold: num(process.env.WALLET_HIGH_AMOUNT_THRESHOLD, 1000000),
+  scheduleUtcOffset: process.env.SCHEDULE_UTC_OFFSET || '+03:30'
 };
 
 env.managementIds = [...new Set([env.ownerId, ...env.adminIds].filter(Boolean))];

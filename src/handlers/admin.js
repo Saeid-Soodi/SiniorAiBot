@@ -24,6 +24,8 @@ const { paginationRow } = require('../utils/pagination');
 const { formatToman, formatDateTime } = require('../utils/format');
 const escapeHtml = require('../utils/html');
 const { promptSkipKeyboard } = require('../keyboards/main');
+const { publishChannelPayload, publishStoredChannelPost } = require('../services/channelPostService');
+const { parseOffsetMinutes, parseScheduleInput, formatScheduledAt } = require('../utils/schedule');
 
 const PAGE_SIZE = 8;
 const adminBack = [[{ text: '🔙 بازگشت', callback_data: 'admin_home' }, { text: '🏠 منوی اصلی پنل', callback_data: 'admin_home' }]];
@@ -56,7 +58,8 @@ function adminMenu() {
     [{ text: '🎓 آموزش‌ها', callback_data: 'a_lessons_1' }, { text: '📝 درخواست‌ها', callback_data: 'a_requests_1' }],
     [{ text: '💳 پرداخت‌ها', callback_data: 'a_payments_1' }, { text: '👥 کاربران', callback_data: 'a_users_1' }],
     [{ text: '🎟 کدهای تخفیف', callback_data: 'a_codes_1' }, { text: '📢 پیام همگانی', callback_data: 'a_broadcast' }],
-    [{ text: '📣 ارسال پست کانال', callback_data: 'a_channel_post' }, { text: '🛡 مدیریت ادمین‌ها', callback_data: 'a_admins' }]
+    [{ text: '📣 ارسال پست کانال', callback_data: 'a_channel_post' }, { text: '🕒 پست‌های زمان‌بندی‌شده', callback_data: 'a_scheduled_1' }],
+    [{ text: '🛡 مدیریت ادمین‌ها', callback_data: 'a_admins' }]
   ] };
 }
 
@@ -114,10 +117,37 @@ function addChannelButton(data, button, placement = 'new') {
 async function sendChannelPreview(ctx, data) {
   const extra = { parse_mode: 'HTML' };
   const replyMarkup = channelReplyMarkup(data);
+  if (data.type === 'album') {
+    const ids = (data.mediaFileIds || []).slice(0, 10);
+    const media = ids.map((fileId, index) => ({
+      type: 'photo',
+      media: fileId,
+      ...(index === 0 ? { caption: data.caption, parse_mode: 'HTML' } : {})
+    }));
+    await ctx.replyWithMediaGroup(media);
+    if (replyMarkup) {
+      return ctx.reply('🔗 <b>پیش‌نمایش دکمه‌های مرتبط</b>', { parse_mode: 'HTML', reply_markup: replyMarkup });
+    }
+    return;
+  }
   if (replyMarkup) extra.reply_markup = replyMarkup;
   if (data.type === 'photo') return ctx.replyWithPhoto(data.fileId, { caption: data.caption, ...extra });
   if (data.type === 'video') return ctx.replyWithVideo(data.fileId, { caption: data.caption, ...extra });
   return ctx.reply(data.caption, extra);
+}
+
+function scheduleOffsetMinutes() {
+  return parseOffsetMinutes(env.scheduleUtcOffset);
+}
+
+function scheduledPostKeyboard(post) {
+  return { inline_keyboard: [
+    [{ text: '🚀 انتشار فوری', callback_data: `scheduled_publish_${post._id}`, style: 'success' }],
+    [{ text: '🕒 تغییر زمان', callback_data: `scheduled_reschedule_${post._id}` }],
+    [{ text: '❌ لغو زمان‌بندی', callback_data: `scheduled_cancel_${post._id}`, style: 'danger' }],
+    [{ text: '🔙 بازگشت', callback_data: 'a_scheduled_1' }],
+    adminBack[0]
+  ] };
 }
 
 async function listGeneric(ctx, Model, query, page, prefix, render, permission) {
@@ -632,105 +662,257 @@ ${escapeHtml(String(request.text).slice(0,200))}
   bot.action('a_broadcast',async ctx=>{if(!(await guard(ctx,'broadcast')))return;setState(ctx.from.id,'broadcast',{step:'message'});await ctx.answerCbQuery();return ctx.reply('پیام نهایی را بفرست؛ بعد پیش‌نمایش و تأیید می‌گیری.');});
   bot.action('broadcast_confirm',async ctx=>{if(!(await guard(ctx,'broadcast')))return;const state=getState(ctx.from.id);if(!state||state.type!=='broadcast_preview')return;const users=await User.find({isBlocked:false});let ok=0,fail=0;for(const u of users){try{await ctx.telegram.copyMessage(u.telegramId,state.data.chatId,state.data.messageId);ok++;}catch{fail++;}}clearState(ctx.from.id);await ctx.answerCbQuery();return ctx.reply(`✅ ارسال شد\nموفق: ${ok}\nناموفق: ${fail}`);});
 
-  bot.action('a_channel_post',async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    setState(ctx.from.id,'channel_post',{step:'type',data:{buttonRows:[]}});
+  bot.action('a_channel_post', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    setState(ctx.from.id, 'channel_post', { step: 'type', data: { buttonRows: [], mediaFileIds: [] } });
     await ctx.answerCbQuery();
-    return ctx.reply('📣 <b>ساخت پست حرفه‌ای کانال</b>\n\nنوع محتوا را انتخاب کن.',{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'🖼 تصویر',callback_data:'channel_type_photo'},{text:'🎬 ویدیو',callback_data:'channel_type_video'}],[{text:'📝 متن',callback_data:'channel_type_text'}],adminBack[0]]}});
+    return ctx.reply('📣 <b>ساخت پست حرفه‌ای کانال</b>\n\nنوع محتوا را انتخاب کن.', {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [
+        [{ text: '🖼 یک تصویر', callback_data: 'channel_type_photo' }, { text: '🎞 آلبوم تصاویر', callback_data: 'channel_type_album' }],
+        [{ text: '🎬 ویدیو', callback_data: 'channel_type_video' }, { text: '📝 متن', callback_data: 'channel_type_text' }],
+        adminBack[0]
+      ] }
+    });
   });
-  bot.action(/^channel_type_(photo|video|text)$/,async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    setState(ctx.from.id,'channel_post',{step:ctx.match[1]==='text'?'caption':'media',data:{type:ctx.match[1],buttonRows:[]}});
+
+  bot.action(/^channel_type_(photo|video|text|album)$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const type = ctx.match[1];
+    const step = type === 'text' ? 'caption' : type === 'album' ? 'album_media' : 'media';
+    setState(ctx.from.id, 'channel_post', { step, data: { type, buttonRows: [], mediaFileIds: [] } });
     await ctx.answerCbQuery();
-    return ctx.reply(ctx.match[1]==='text'?'📝 متن نهایی پست را بفرست. می‌توانی از HTML ساده مثل <b>Bold</b> استفاده کنی.':'📎 فایل رسانه را بفرست.');
+    if (type === 'album') {
+      return ctx.reply('🎞 <b>آلبوم تصاویر</b>\n\nبین ۲ تا ۱۰ عکس بفرست. می‌توانی عکس‌ها را یکی‌یکی یا به‌صورت گروهی ارسال کنی.\nوقتی تمام شد، دکمه «پایان انتخاب تصاویر» را بزن.', {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [
+          [{ text: '✅ پایان انتخاب تصاویر', callback_data: 'channel_album_done', style: 'success' }],
+          [{ text: '🗑 حذف آخرین عکس', callback_data: 'channel_album_remove_last' }],
+          [{ text: '❌ لغو', callback_data: 'cancel_input', style: 'danger' }]
+        ] }
+      });
+    }
+    return ctx.reply(type === 'text'
+      ? '📝 متن نهایی پست را بفرست. می‌توانی از HTML ساده مثل <b>Bold</b> استفاده کنی.'
+      : '📎 فایل رسانه را بفرست.');
   });
-  bot.action('channel_button_add',async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const s=getState(ctx.from.id); if(!s||s.type!=='channel_post_builder')return;
-    setState(ctx.from.id,'channel_post',{step:'button_text',data:s.data});
+
+  bot.action('channel_album_remove_last', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const state = getState(ctx.from.id);
+    if (!state || state.type !== 'channel_post' || state.data?.step !== 'album_media') return ctx.answerCbQuery('مرحله آلبوم فعال نیست.', { show_alert: true });
+    const ids = state.data.data.mediaFileIds || [];
+    if (!ids.length) return ctx.answerCbQuery('هنوز عکسی ثبت نشده.', { show_alert: true });
+    ids.pop();
+    setState(ctx.from.id, 'channel_post', state.data);
+    return ctx.answerCbQuery(`حذف شد. ${ids.length}/10 عکس باقی مانده.`);
+  });
+
+  bot.action('channel_album_done', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const state = getState(ctx.from.id);
+    if (!state || state.type !== 'channel_post' || state.data?.step !== 'album_media') return ctx.answerCbQuery('مرحله آلبوم فعال نیست.', { show_alert: true });
+    const flow = state.data;
+    const ids = flow.data.mediaFileIds || [];
+    if (ids.length < 2) return ctx.answerCbQuery('برای آلبوم حداقل ۲ تصویر لازم است.', { show_alert: true });
+    flow.step = 'caption';
+    setState(ctx.from.id, 'channel_post', flow);
+    await ctx.answerCbQuery(`آلبوم با ${ids.length} تصویر ثبت شد.`);
+    return ctx.reply('📝 کپشن نهایی آلبوم را بفرست.');
+  });
+
+  bot.action('channel_button_add', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_builder') return;
+    setState(ctx.from.id, 'channel_post', { step: 'button_text', data: s.data });
     await ctx.answerCbQuery();
     return ctx.reply('📝 متن دکمه را بفرست.\nمثال: دریافت پرامپت دختر تابستانی');
   });
-  bot.action(/^channel_prompt_page_(\d+)$/,async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const s=getState(ctx.from.id); if(!s||!['channel_post_builder','channel_post'].includes(s.type))return;
-    const page=Number(ctx.match[1]); const total=await Prompt.countDocuments({isActive:true}); const pages=Math.max(1,Math.ceil(total/PAGE_SIZE));
-    const items=await Prompt.find({isActive:true}).sort({createdAt:-1}).skip((page-1)*PAGE_SIZE).limit(PAGE_SIZE);
-    const rows=items.map(p=>[{text:`✨ ${p.title}`,callback_data:`channel_pick_prompt_${p._id}`}]);
-    rows.push(paginationRow(page,pages,'channel_prompt_page'));
-    rows.push([{text:'🔙 بازگشت به پست‌ساز',callback_data:'channel_builder'}]);
-    await ctx.answerCbQuery().catch(()=>{});
-    return ctx.editMessageText('🤖 یک پرامپت را انتخاب کن تا لینک دریافت آن به دکمه متصل شود.',{reply_markup:{inline_keyboard:rows}}).catch(()=>ctx.reply('🤖 یک پرامپت را انتخاب کن.',{reply_markup:{inline_keyboard:rows}}));
+
+  bot.action(/^channel_prompt_page_(\d+)$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s || !['channel_post_builder', 'channel_post'].includes(s.type)) return;
+    const page = Number(ctx.match[1]); const total = await Prompt.countDocuments({ isActive: true, isDeleted: { $ne: true } }); const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const items = await Prompt.find({ isActive: true, isDeleted: { $ne: true } }).sort({ createdAt: -1 }).skip((page - 1) * PAGE_SIZE).limit(PAGE_SIZE);
+    const rows = items.map(p => [{ text: `✨ ${p.title}`, callback_data: `channel_pick_prompt_${p._id}` }]);
+    rows.push(paginationRow(page, pages, 'channel_prompt_page'));
+    rows.push([{ text: '🔙 بازگشت به پست‌ساز', callback_data: 'channel_builder' }]);
+    await ctx.answerCbQuery().catch(() => {});
+    return ctx.editMessageText('🤖 یک پرامپت را انتخاب کن تا لینک دریافت آن به دکمه متصل شود.', { reply_markup: { inline_keyboard: rows } }).catch(() => ctx.reply('🤖 یک پرامپت را انتخاب کن.', { reply_markup: { inline_keyboard: rows } }));
   });
-  bot.action(/^channel_pick_prompt_([a-f0-9]{24})$/,async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const current=getState(ctx.from.id); if(!current)return;
-    const p=await Prompt.findById(ctx.match[1]); if(!p)return ctx.answerCbQuery('پرامپت پیدا نشد.');
-    const data=current.data;
-    data.pendingButton={text:`📥 دریافت ${p.title}`,url:`https://t.me/${env.botUsername}?start=prompt_${p.slug}`};
-    setState(ctx.from.id,'channel_post',{step:'prompt_button_text',data});
+
+  bot.action(/^channel_pick_prompt_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const current = getState(ctx.from.id); if (!current) return;
+    const p = await Prompt.findById(ctx.match[1]); if (!p) return ctx.answerCbQuery('پرامپت پیدا نشد.');
+    const data = current.data;
+    data.pendingButton = { text: `📥 دریافت ${p.title}`, url: `https://t.me/${env.botUsername}?start=prompt_${p.slug}` };
+    setState(ctx.from.id, 'channel_post', { step: 'prompt_button_text', data });
     await ctx.answerCbQuery();
     return ctx.reply(`✅ پرامپت انتخاب شد: ${p.title}\n\nعنوان دکمه را بفرست یا «خودکار» بنویس تا این عنوان استفاده شود:\n${data.pendingButton.text}`);
   });
-  bot.action('channel_place_new',async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const s=getState(ctx.from.id); if(!s||s.type!=='channel_post_place')return;
-    try{addChannelButton(s.data,s.data.pendingButton,'new');}catch(e){return ctx.answerCbQuery(e.message,{show_alert:true});}
-    delete s.data.pendingButton; setState(ctx.from.id,'channel_post_builder',s.data); await ctx.answerCbQuery('دکمه اضافه شد.');
-    return ctx.editMessageText(`✅ دکمه اضافه شد.\nتعداد دکمه‌ها: ${s.data.buttonRows.flat().length}`,{reply_markup:channelBuilderKeyboard(s.data)}).catch(()=>ctx.reply('✅ دکمه اضافه شد.',{reply_markup:channelBuilderKeyboard(s.data)}));
+
+  bot.action('channel_place_new', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_place') return;
+    try { addChannelButton(s.data, s.data.pendingButton, 'new'); } catch (e) { return ctx.answerCbQuery(e.message, { show_alert: true }); }
+    delete s.data.pendingButton; setState(ctx.from.id, 'channel_post_builder', s.data); await ctx.answerCbQuery('دکمه اضافه شد.');
+    return ctx.editMessageText(`✅ دکمه اضافه شد.\nتعداد دکمه‌ها: ${s.data.buttonRows.flat().length}`, { reply_markup: channelBuilderKeyboard(s.data) }).catch(() => ctx.reply('✅ دکمه اضافه شد.', { reply_markup: channelBuilderKeyboard(s.data) }));
   });
-  bot.action('channel_place_same',async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const s=getState(ctx.from.id); if(!s||s.type!=='channel_post_place')return;
-    try{addChannelButton(s.data,s.data.pendingButton,'same');}catch(e){return ctx.answerCbQuery(e.message,{show_alert:true});}
-    delete s.data.pendingButton; setState(ctx.from.id,'channel_post_builder',s.data); await ctx.answerCbQuery('دکمه اضافه شد.');
-    return ctx.editMessageText(`✅ دکمه اضافه شد.\nتعداد دکمه‌ها: ${s.data.buttonRows.flat().length}`,{reply_markup:channelBuilderKeyboard(s.data)}).catch(()=>ctx.reply('✅ دکمه اضافه شد.',{reply_markup:channelBuilderKeyboard(s.data)}));
+
+  bot.action('channel_place_same', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_place') return;
+    try { addChannelButton(s.data, s.data.pendingButton, 'same'); } catch (e) { return ctx.answerCbQuery(e.message, { show_alert: true }); }
+    delete s.data.pendingButton; setState(ctx.from.id, 'channel_post_builder', s.data); await ctx.answerCbQuery('دکمه اضافه شد.');
+    return ctx.editMessageText(`✅ دکمه اضافه شد.\nتعداد دکمه‌ها: ${s.data.buttonRows.flat().length}`, { reply_markup: channelBuilderKeyboard(s.data) }).catch(() => ctx.reply('✅ دکمه اضافه شد.', { reply_markup: channelBuilderKeyboard(s.data) }));
   });
-  bot.action('channel_builder',async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const s=getState(ctx.from.id); if(!s)return;
-    setState(ctx.from.id,'channel_post_builder',s.data);
-    await ctx.answerCbQuery().catch(()=>{});
-    return ctx.editMessageText(`🧩 <b>پست‌ساز کانال</b>\n\nدکمه‌های فعلی: ${(s.data.buttonRows||[]).flat().length}\nمی‌توانی چند دکمه لینک‌دار اضافه کنی یا پیش‌نمایش نهایی را ببینی.`,{parse_mode:'HTML',reply_markup:channelBuilderKeyboard(s.data)}).catch(()=>ctx.reply('🧩 پست‌ساز کانال',{reply_markup:channelBuilderKeyboard(s.data)}));
+
+  bot.action('channel_builder', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s) return;
+    setState(ctx.from.id, 'channel_post_builder', s.data);
+    await ctx.answerCbQuery().catch(() => {});
+    return ctx.editMessageText(`🧩 <b>پست‌ساز کانال</b>\n\nدکمه‌های فعلی: ${(s.data.buttonRows || []).flat().length}\nمی‌توانی چند دکمه لینک‌دار اضافه کنی یا پیش‌نمایش نهایی را ببینی.`, { parse_mode: 'HTML', reply_markup: channelBuilderKeyboard(s.data) }).catch(() => ctx.reply('🧩 پست‌ساز کانال', { reply_markup: channelBuilderKeyboard(s.data) }));
   });
-  bot.action('channel_buttons_manage',async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const s=getState(ctx.from.id); if(!s)return;
-    const flat=[]; (s.data.buttonRows||[]).forEach((row,ri)=>row.forEach((b,bi)=>flat.push({ri,bi,b})));
-    const rows=flat.map(({ri,bi,b},i)=>[{text:`🗑 ${i+1}. ${b.text}`,callback_data:`channel_button_remove_${ri}_${bi}`,style:'danger'}]);
-    rows.push([{text:'🔙 بازگشت به پست‌ساز',callback_data:'channel_builder'}]);
+
+  bot.action('channel_buttons_manage', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s) return;
+    const flat = []; (s.data.buttonRows || []).forEach((row, ri) => row.forEach((b, bi) => flat.push({ ri, bi, b })));
+    const rows = flat.map(({ ri, bi, b }, i) => [{ text: `🗑 ${i + 1}. ${b.text}`, callback_data: `channel_button_remove_${ri}_${bi}`, style: 'danger' }]);
+    rows.push([{ text: '🔙 بازگشت به پست‌ساز', callback_data: 'channel_builder' }]);
     await ctx.answerCbQuery();
-    return ctx.editMessageText('🧩 برای حذف هر دکمه روی آن بزن.',{reply_markup:{inline_keyboard:rows}});
+    return ctx.editMessageText('🧩 برای حذف هر دکمه روی آن بزن.', { reply_markup: { inline_keyboard: rows } });
   });
-  bot.action(/^channel_button_remove_(\d+)_(\d+)$/,async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const s=getState(ctx.from.id); if(!s)return;
-    const ri=Number(ctx.match[1]),bi=Number(ctx.match[2]);
-    if(s.data.buttonRows?.[ri]?.[bi]){s.data.buttonRows[ri].splice(bi,1);if(!s.data.buttonRows[ri].length)s.data.buttonRows.splice(ri,1);}
-    setState(ctx.from.id,'channel_post_builder',s.data); await ctx.answerCbQuery('حذف شد.');
-    return ctx.editMessageText(`✅ دکمه حذف شد.\nتعداد باقی‌مانده: ${(s.data.buttonRows||[]).flat().length}`,{reply_markup:channelBuilderKeyboard(s.data)});
+
+  bot.action(/^channel_button_remove_(\d+)_(\d+)$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s) return;
+    const ri = Number(ctx.match[1]), bi = Number(ctx.match[2]);
+    if (s.data.buttonRows?.[ri]?.[bi]) { s.data.buttonRows[ri].splice(bi, 1); if (!s.data.buttonRows[ri].length) s.data.buttonRows.splice(ri, 1); }
+    setState(ctx.from.id, 'channel_post_builder', s.data); await ctx.answerCbQuery('حذف شد.');
+    return ctx.editMessageText(`✅ دکمه حذف شد.\nتعداد باقی‌مانده: ${(s.data.buttonRows || []).flat().length}`, { reply_markup: channelBuilderKeyboard(s.data) });
   });
-  bot.action('channel_preview',async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const s=getState(ctx.from.id); if(!s)return;
+
+  bot.action('channel_preview', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s) return;
     await ctx.answerCbQuery();
-    await sendChannelPreview(ctx,s.data);
-    setState(ctx.from.id,'channel_post_preview',s.data);
-    return ctx.reply('👁 پیش‌نمایش بالا آماده است. انتشار شود؟',{reply_markup:{inline_keyboard:[[{text:`✅ انتشار در ${env.channelUsername}`,callback_data:'channel_publish',style:'success'}],[{text:'✏️ بازگشت به ویرایش',callback_data:'channel_builder'}],[{text:'❌ لغو',callback_data:'cancel_input',style:'danger'}]]}});
+    await sendChannelPreview(ctx, s.data);
+    setState(ctx.from.id, 'channel_post_preview', s.data);
+    return ctx.reply('👁 پیش‌نمایش بالا آماده است. روش انتشار را انتخاب کن.', { reply_markup: { inline_keyboard: [
+      [{ text: `🚀 انتشار فوری در ${env.channelUsername}`, callback_data: 'channel_publish', style: 'success' }],
+      [{ text: '🕒 زمان‌بندی انتشار', callback_data: 'channel_schedule' }],
+      [{ text: '✏️ بازگشت به ویرایش', callback_data: 'channel_builder' }],
+      [{ text: '❌ لغو', callback_data: 'cancel_input', style: 'danger' }]
+    ] } });
   });
-  bot.action('channel_publish',async ctx=>{
-    if(!(await guard(ctx,'channelPosts')))return;
-    const s=getState(ctx.from.id);if(!s||s.type!=='channel_post_preview')return;
-    const d=s.data; const extra={parse_mode:'HTML'}; const replyMarkup=channelReplyMarkup(d); if(replyMarkup)extra.reply_markup=replyMarkup;
-    let m;
-    if(d.type==='photo')m=await ctx.telegram.sendPhoto(env.channelUsername,d.fileId,{caption:d.caption,...extra});
-    else if(d.type==='video')m=await ctx.telegram.sendVideo(env.channelUsername,d.fileId,{caption:d.caption,...extra});
-    else m=await ctx.telegram.sendMessage(env.channelUsername,d.caption,extra);
-    const channelName=String(env.channelUsername).replace(/^@/,'');
-    const postUrl=`https://t.me/${channelName}/${m.message_id}`;
-    await ChannelPost.create({type:d.type,fileId:d.fileId||null,caption:d.caption,buttonRows:d.buttonRows||[],channelUsername:env.channelUsername,messageId:m.message_id,postUrl,createdBy:ctx.from.id});
-    clearState(ctx.from.id); await ctx.answerCbQuery();
-    return ctx.reply(`✅ پست با موفقیت منتشر شد.\n\n🔗 ${postUrl}\n🧩 تعداد دکمه‌ها: ${(d.buttonRows||[]).flat().length}`);
+
+  bot.action('channel_schedule', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_preview') return;
+    setState(ctx.from.id, 'channel_post', { step: 'schedule_datetime', data: s.data });
+    await ctx.answerCbQuery();
+    return ctx.reply(`🕒 تاریخ و ساعت انتشار را با این قالب بفرست:\n\n<code>2026-07-20 18:30</code>\n\nزمان بر اساس UTC${env.scheduleUtcOffset} محاسبه می‌شود.`, { parse_mode: 'HTML' });
+  });
+
+  bot.action('channel_publish', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_preview') return;
+    const d = s.data;
+    try {
+      const result = await publishChannelPayload(ctx.telegram, { ...d, channelUsername: env.channelUsername });
+      await ChannelPost.create({
+        type: d.type,
+        fileId: d.fileId || null,
+        mediaFileIds: d.mediaFileIds || [],
+        caption: d.caption,
+        buttonRows: d.buttonRows || [],
+        channelUsername: env.channelUsername,
+        status: 'published',
+        publishedAt: result.publishedAt,
+        messageId: result.messageId,
+        messageIds: result.messageIds,
+        buttonMessageId: result.buttonMessageId,
+        postUrl: result.postUrl,
+        createdBy: ctx.from.id
+      });
+      clearState(ctx.from.id); await ctx.answerCbQuery();
+      return ctx.reply(`✅ پست با موفقیت منتشر شد.\n\n🔗 ${result.postUrl || 'منتشر شد'}\n🧩 تعداد دکمه‌ها: ${(d.buttonRows || []).flat().length}`);
+    } catch (error) {
+      console.error('CHANNEL_PUBLISH_ERROR', error);
+      return ctx.answerCbQuery('انتشار ناموفق بود. لاگ سرور را بررسی کن.', { show_alert: true });
+    }
+  });
+
+  bot.action(/^a_scheduled_(\d+)$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const page = Number(ctx.match[1]);
+    const query = { status: 'scheduled' };
+    const total = await ChannelPost.countDocuments(query);
+    const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const current = Math.min(Math.max(page, 1), pages);
+    const posts = await ChannelPost.find(query).sort({ scheduledAt: 1 }).skip((current - 1) * PAGE_SIZE).limit(PAGE_SIZE);
+    const rows = posts.map(post => [{
+      text: `🕒 ${formatScheduledAt(post.scheduledAt, scheduleOffsetMinutes())} | ${post.type}`,
+      callback_data: `scheduled_view_${post._id}`
+    }]);
+    rows.push(paginationRow(current, pages, 'a_scheduled'));
+    rows.push(adminBack[0]);
+    await ctx.answerCbQuery().catch(() => {});
+    return ctx.editMessageText(`🕒 <b>پست‌های زمان‌بندی‌شده</b>\n\nتعداد: ${total}`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } }).catch(() => ctx.reply(`🕒 پست‌های زمان‌بندی‌شده: ${total}`, { reply_markup: { inline_keyboard: rows } }));
+  });
+
+  bot.action(/^scheduled_view_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const post = await ChannelPost.findById(ctx.match[1]);
+    if (!post || post.status !== 'scheduled') return ctx.answerCbQuery('این پست دیگر در صف زمان‌بندی نیست.', { show_alert: true });
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(`🕒 <b>پست زمان‌بندی‌شده</b>\n\nنوع: ${post.type}\nزمان: <code>${formatScheduledAt(post.scheduledAt, scheduleOffsetMinutes())}</code>\nدکمه‌ها: ${(post.buttonRows || []).flat().length}\n\n${post.caption.slice(0, 500)}`, { parse_mode: 'HTML', reply_markup: scheduledPostKeyboard(post) });
+  });
+
+  bot.action(/^scheduled_publish_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const post = await ChannelPost.findById(ctx.match[1]);
+    if (!post || !['scheduled', 'failed'].includes(post.status)) return ctx.answerCbQuery('این پست قابل انتشار نیست.', { show_alert: true });
+    post.status = 'publishing'; await post.save();
+    try {
+      await publishStoredChannelPost(ctx.telegram, post);
+      await ctx.answerCbQuery('منتشر شد.');
+      return ctx.editMessageText(`✅ پست منتشر شد.\n\n${post.postUrl || ''}`, { reply_markup: { inline_keyboard: [[{ text: '🔙 بازگشت به زمان‌بندی‌ها', callback_data: 'a_scheduled_1' }], adminBack[0]] } });
+    } catch (error) {
+      console.error('SCHEDULED_FORCE_PUBLISH_ERROR', error);
+      return ctx.answerCbQuery('انتشار ناموفق بود.', { show_alert: true });
+    }
+  });
+
+  bot.action(/^scheduled_reschedule_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const post = await ChannelPost.findById(ctx.match[1]);
+    if (!post || post.status !== 'scheduled') return ctx.answerCbQuery('پست پیدا نشد.', { show_alert: true });
+    setState(ctx.from.id, 'channel_reschedule', { postId: String(post._id) });
+    await ctx.answerCbQuery();
+    return ctx.reply(`🕒 زمان جدید را بفرست.\nمثال: <code>2026-07-20 21:00</code>\nUTC${env.scheduleUtcOffset}`, { parse_mode: 'HTML' });
+  });
+
+  bot.action(/^scheduled_cancel_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const post = await ChannelPost.findById(ctx.match[1]);
+    if (!post || post.status !== 'scheduled') return ctx.answerCbQuery('این پست دیگر زمان‌بندی‌شده نیست.', { show_alert: true });
+    await ctx.answerCbQuery();
+    return ctx.editMessageText('⚠️ زمان‌بندی این پست لغو شود؟ خود رکورد برای تاریخچه باقی می‌ماند.', { reply_markup: { inline_keyboard: [
+      [{ text: '✅ بله، لغو شود', callback_data: `scheduled_cancel_confirm_${post._id}`, style: 'danger' }],
+      [{ text: '❌ انصراف', callback_data: `scheduled_view_${post._id}` }]
+    ] } });
+  });
+
+  bot.action(/^scheduled_cancel_confirm_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const post = await ChannelPost.findOneAndUpdate({ _id: ctx.match[1], status: 'scheduled' }, { status: 'cancelled' }, { new: true });
+    if (!post) return ctx.answerCbQuery('پست پیدا نشد یا قبلاً تغییر کرده.', { show_alert: true });
+    await ctx.answerCbQuery('زمان‌بندی لغو شد.');
+    return ctx.editMessageText('✅ زمان‌بندی پست لغو شد.', { reply_markup: { inline_keyboard: [[{ text: '🔙 بازگشت به زمان‌بندی‌ها', callback_data: 'a_scheduled_1' }], adminBack[0]] } });
   });
 
   async function skipPromptStep(ctx, expectedStep, nextStep, mutate, replyText, extra = {}) {
@@ -892,6 +1074,19 @@ ${escapeHtml(String(request.text).slice(0,200))}
       const data = flow.data || (flow.data = {});
       const step = flow.step;
 
+      if (step === 'album_media') {
+        if (!ctx.message.photo) return ctx.reply('فقط عکس بفرست. برای پایان، دکمه «پایان انتخاب تصاویر» را بزن.');
+        data.mediaFileIds ||= [];
+        if (data.mediaFileIds.length >= 10) return ctx.reply('حداکثر ۱۰ عکس ثبت شده است. حالا «پایان انتخاب تصاویر» را بزن.');
+        data.mediaFileIds.push(ctx.message.photo.at(-1).file_id);
+        setState(ctx.from.id, 'channel_post', flow);
+        return ctx.reply(`✅ عکس ثبت شد: ${data.mediaFileIds.length}/10`, { reply_markup: { inline_keyboard: [
+          [{ text: '✅ پایان انتخاب تصاویر', callback_data: 'channel_album_done', style: 'success' }],
+          [{ text: '🗑 حذف آخرین عکس', callback_data: 'channel_album_remove_last' }],
+          [{ text: '❌ لغو', callback_data: 'cancel_input', style: 'danger' }]
+        ] } });
+      }
+
       if (step === 'media') {
         if (data.type === 'photo' && !ctx.message.photo) return ctx.reply('عکس بفرست.');
         if (data.type === 'video' && !ctx.message.video) return ctx.reply('ویدیو بفرست.');
@@ -906,6 +1101,28 @@ ${escapeHtml(String(request.text).slice(0,200))}
         if (!data.caption) return ctx.reply('متن یا کپشن پست را بفرست.');
         setState(ctx.from.id, 'channel_post_builder', data);
         return ctx.reply('✅ محتوای اصلی پست ثبت شد. حالا می‌توانی چند دکمه لینک‌دار اضافه کنی یا مستقیم پیش‌نمایش را ببینی.', { reply_markup: channelBuilderKeyboard(data) });
+      }
+
+      if (step === 'schedule_datetime') {
+        const scheduledAt = parseScheduleInput(text, scheduleOffsetMinutes());
+        if (!scheduledAt) return ctx.reply('فرمت تاریخ درست نیست. مثال: 2026-07-20 18:30');
+        if (scheduledAt <= new Date()) return ctx.reply('زمان انتشار باید در آینده باشد.');
+        const post = await ChannelPost.create({
+          type: data.type,
+          fileId: data.fileId || null,
+          mediaFileIds: data.mediaFileIds || [],
+          caption: data.caption,
+          buttonRows: data.buttonRows || [],
+          channelUsername: env.channelUsername,
+          status: 'scheduled',
+          scheduledAt,
+          createdBy: ctx.from.id
+        });
+        clearState(ctx.from.id);
+        return ctx.reply(`✅ پست زمان‌بندی شد.
+
+🕒 زمان انتشار: ${formatScheduledAt(post.scheduledAt, scheduleOffsetMinutes())}
+📌 شناسه: ${post._id}`, { reply_markup: { inline_keyboard: [[{ text: '🕒 مدیریت زمان‌بندی‌ها', callback_data: 'a_scheduled_1' }], adminBack[0]] } });
       }
 
       if (step === 'button_text') {
@@ -930,6 +1147,21 @@ ${escapeHtml(String(request.text).slice(0,200))}
         const canSame = data.buttonRows?.length && data.buttonRows.at(-1).length < 2;
         return ctx.reply('چیدمان این دکمه را انتخاب کن.', { reply_markup: { inline_keyboard: [[{ text: '⬇️ ردیف جدید', callback_data: 'channel_place_new' }], ...(canSame ? [[{ text: '↔️ کنار دکمه قبلی', callback_data: 'channel_place_same' }]] : [])] } });
       }
+    }
+
+    if (state.type === 'channel_reschedule') {
+      const scheduledAt = parseScheduleInput(text, scheduleOffsetMinutes());
+      if (!scheduledAt) return ctx.reply('فرمت تاریخ درست نیست. مثال: 2026-07-20 21:00');
+      if (scheduledAt <= new Date()) return ctx.reply('زمان جدید باید در آینده باشد.');
+      const post = await ChannelPost.findOneAndUpdate(
+        { _id: state.data.postId, status: 'scheduled' },
+        { scheduledAt },
+        { new: true }
+      );
+      clearState(ctx.from.id);
+      if (!post) return ctx.reply('پست پیدا نشد یا وضعیتش تغییر کرده است.');
+      return ctx.reply(`✅ زمان انتشار تغییر کرد.
+🕒 ${formatScheduledAt(post.scheduledAt, scheduleOffsetMinutes())}`, { reply_markup: { inline_keyboard: [[{ text: '🕒 بازگشت به زمان‌بندی‌ها', callback_data: 'a_scheduled_1' }], adminBack[0]] } });
     }
     if(state.type==='support_reply'){const ticket=await SupportTicket.findById(state.data.ticketId);if(!ticket)return;await ctx.telegram.sendMessage(ticket.userTelegramId,`💬 پاسخ پشتیبانی Sinior Ai:\n\n${text}`).catch(()=>{});ticket.status='answered';ticket.answeredBy=ctx.from.id;ticket.answeredAt=new Date();ticket.answerText=text;await ticket.save();clearState(ctx.from.id);return ctx.reply('✅ پاسخ ارسال شد.');}
     return next();
