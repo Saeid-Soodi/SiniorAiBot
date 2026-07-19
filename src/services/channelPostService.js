@@ -19,7 +19,13 @@ async function publishChannelPayload(telegram, payload) {
   let messageId = null;
   let buttonMessageId = null;
 
-  if (payload.type === 'album') {
+  if (payload.sourceChatId && payload.sourceMessageId && payload.type === 'text') {
+    const sent = await telegram.copyMessage(channel, payload.sourceChatId, payload.sourceMessageId, {
+      ...(buttons ? { reply_markup: buttons } : {})
+    });
+    messageId = sent.message_id;
+    messageIds.push(messageId);
+  } else if (payload.type === 'album') {
     const ids = Array.isArray(payload.mediaFileIds) ? payload.mediaFileIds.slice(0, 10) : [];
     if (ids.length < 2) throw new Error('برای آلبوم حداقل ۲ تصویر لازم است.');
 
@@ -45,7 +51,7 @@ async function publishChannelPayload(telegram, payload) {
   } else if (payload.type === 'photo') {
     const sent = await telegram.sendPhoto(channel, payload.fileId, {
       caption: payload.caption,
-      parse_mode: 'HTML',
+      ...(payload.captionEntities?.length ? { caption_entities: payload.captionEntities } : { parse_mode: 'HTML' }),
       ...(buttons ? { reply_markup: buttons } : {})
     });
     messageId = sent.message_id;
@@ -53,14 +59,14 @@ async function publishChannelPayload(telegram, payload) {
   } else if (payload.type === 'video') {
     const sent = await telegram.sendVideo(channel, payload.fileId, {
       caption: payload.caption,
-      parse_mode: 'HTML',
+      ...(payload.captionEntities?.length ? { caption_entities: payload.captionEntities } : { parse_mode: 'HTML' }),
       ...(buttons ? { reply_markup: buttons } : {})
     });
     messageId = sent.message_id;
     messageIds.push(messageId);
   } else {
     const sent = await telegram.sendMessage(channel, payload.caption, {
-      parse_mode: 'HTML',
+      ...(payload.entities?.length ? { entities: payload.entities } : { parse_mode: 'HTML' }),
       ...(buttons ? { reply_markup: buttons } : {})
     });
     messageId = sent.message_id;

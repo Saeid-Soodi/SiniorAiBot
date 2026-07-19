@@ -129,3 +129,6 @@ npm run dev
 - Unified safe deletion flow for AI lessons with confirmation, soft delete, archive, and restore.
 - Safer lesson editing when records are missing.
 - Improved admin navigation after lesson/admin actions.
+
+## v5.5.0
+این نسخه عضویت اجباری سراسری، مدیریت کانال‌های عضویت از پنل، ویرایش فیلدی پرامپت، زمان‌بندی شمسی/میلادی مرحله‌ای و حفظ قالب‌بندی واقعی پیام تلگرام را اضافه می‌کند. راهنمای کامل دیپلوی در `DEPLOY-v5.5.0.md` قرار دارد.

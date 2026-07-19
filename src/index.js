@@ -13,10 +13,13 @@ const { registerAdminHandlers } = require('./handlers/admin');
 const { registerUserHandlers } = require('./handlers/user');
 const seedLessons = require('./services/seedLessons');
 const { startChannelPostScheduler } = require('./services/channelPostService');
+const { globalMembershipMiddleware, seedRequiredChannels } = require('./services/joinService');
 
 const bot = new Telegraf(env.botToken, {
   handlerTimeout: 90_000
 });
+
+bot.use(globalMembershipMiddleware());
 
 registerAdminHandlers(bot);
 registerUserHandlers(bot);
@@ -78,6 +81,7 @@ async function bootstrap() {
     console.log('✅ MongoDB connected');
 
     await seedLessons(env.ownerId);
+    await seedRequiredChannels(env.ownerId);
 
     await bot.launch({
       dropPendingUpdates: false

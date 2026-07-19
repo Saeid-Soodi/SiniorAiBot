@@ -9,7 +9,7 @@ const WalletTransaction = require('../models/WalletTransaction');
 const env = require('../config/env');
 const { mainMenu, joinButtons, promptButtons, cancelKeyboard } = require('../keyboards/main');
 const { upsertUser, refreshDailyUsage, getDailyLimit, canReceivePrompt, consumePrompt } = require('../services/userService');
-const { isJoined } = require('../services/joinService');
+const { isJoined, getMissingChannels } = require('../services/joinService');
 const { sendPrompt } = require('../services/promptService');
 const { track, trackClick } = require('../services/analyticsService');
 const { attachReferrer, validateReferral } = require('../services/referralService');
@@ -66,7 +66,7 @@ async function deliverBySlug(ctx, slug, source = 'telegram', campaign = null) {
   if (!prompt) return ctx.reply('این پرامپت پیدا نشد.');
   await trackClick({ telegramId: user.telegramId, prompt, source, campaign });
   pendingPrompt.set(user.telegramId, { slug, source, campaign, promptId: prompt._id });
-  if (!isOwner(user.telegramId) && !(await isJoined(ctx, user.telegramId))) return ctx.reply('🔒 برای استفاده از ربات ابتدا در کانال‌های زیر عضو شو.', { reply_markup: joinButtons() });
+  if (!isOwner(user.telegramId) && !(await isJoined(ctx, user.telegramId))) { const missing = await getMissingChannels(ctx, user.telegramId); return ctx.reply('🔒 برای استفاده از ربات ابتدا در کانال‌های زیر عضو شو.', { reply_markup: joinButtons(missing) }); }
   if (!(await canReceivePrompt(user, prompt._id))) return ctx.reply('🚫 سهمیه امروزت تمام شده. با VIP روزانه ۱۰ پرامپت دریافت کن.', { reply_markup: { inline_keyboard: [[{ text: '👑 خرید VIP', callback_data: 'buy_vip', style: 'primary' }]] } });
   await consumePrompt(user, prompt._id); await track({ telegramId: user.telegramId, promptId: prompt._id, source, campaign, event: 'delivery' }); await validateReferral(user, ctx);
   const favorite = user.favorites.some(id => String(id) === String(prompt._id)); return sendPrompt(ctx, prompt, favorite);
@@ -109,7 +109,7 @@ function registerUserHandlers(bot) {
   bot.action('help_lessons', async ctx => { await ctx.answerCbQuery(); return sendDailyLesson(ctx); });
   bot.action('help_support', async ctx => { await ctx.answerCbQuery(); return ctx.reply('🛟 پشتیبانی Sinior Ai', { reply_markup: { inline_keyboard: [[{ text: '🌐 شبکه‌های اجتماعی سینیور', callback_data: 'socials' }], [{ text: '💬 ارسال پیام به پشتیبانی', callback_data: 'support_message', style: 'primary' }]] } }); });
   bot.action('cancel_input', async ctx => { clearState(ctx.from.id); paymentDraft.delete(ctx.from.id); await ctx.answerCbQuery('عملیات لغو شد.'); return ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {}); });
-  bot.action('check_join', async ctx => { await ctx.answerCbQuery(); if (!(await isJoined(ctx, ctx.from.id))) return ctx.reply('هنوز عضویت در همه کانال‌ها کامل نشده است.'); const p = pendingPrompt.get(ctx.from.id); return p ? deliverBySlug(ctx, p.slug, p.source, p.campaign) : ctx.reply('✅ عضویت تأیید شد.'); });
+  bot.action('check_join', async ctx => { await ctx.answerCbQuery(); if (!(await isJoined(ctx, ctx.from.id))) { const missing = await getMissingChannels(ctx, ctx.from.id); return ctx.reply('هنوز عضویت در کانال‌های زیر کامل نشده است.', { reply_markup: joinButtons(missing) }); } const p = pendingPrompt.get(ctx.from.id); return p ? deliverBySlug(ctx, p.slug, p.source, p.campaign) : ctx.reply('✅ عضویت تأیید شد.'); });
 
   bot.hears('👤 حساب من', showAccount); bot.action('my_account', async ctx => { await ctx.answerCbQuery(); return showAccount(ctx); });
   bot.hears('👑 خرید اشتراک', ctx => showVip(ctx)); bot.action('buy_vip', async ctx => { await ctx.answerCbQuery(); return showVip(ctx); });

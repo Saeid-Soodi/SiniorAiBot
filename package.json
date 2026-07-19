@@ -1,8 +1,8 @@
 {
   "name": "sinioraibot",
-  "version": "5.4.0",
+  "version": "5.5.0",
   "private": true,
-  "description": "SiniorAi Telegram bot v5.4.0 with multi-photo albums, scheduled channel publishing, scheduler management, wallet, gifting and admin tools",
+  "description": "SiniorAi Telegram bot v5.5.0 with global membership, field-based prompt editing, Persian scheduling and formatting-preserving publishing",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
@@ -15,6 +15,7 @@
   "dependencies": {
     "dotenv": "^16.4.7",
     "mongoose": "^9.7.3",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "jalaali-js": "^1.2.8"
   }
 }

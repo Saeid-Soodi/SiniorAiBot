@@ -10,6 +10,10 @@ const schema = new mongoose.Schema({
   fileId: { type: String, default: null },
   mediaFileIds: { type: [String], default: [] },
   caption: { type: String, required: true },
+  sourceChatId: { type: String, default: null },
+  sourceMessageId: { type: Number, default: null },
+  entities: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  captionEntities: { type: [mongoose.Schema.Types.Mixed], default: [] },
   buttonRows: { type: [[buttonSchema]], default: [] },
   channelUsername: { type: String, required: true },
 

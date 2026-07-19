@@ -9,6 +9,8 @@ const Admin = require('../models/Admin');
 const SupportTicket = require('../models/SupportTicket');
 const WalletTransaction = require('../models/WalletTransaction');
 const ChannelPost = require('../models/ChannelPost');
+const RequiredChannel = require('../models/RequiredChannel');
+const Setting = require('../models/Setting');
 const ClickEvent = require('../models/ClickEvent');
 const PromptRating = require('../models/PromptRating');
 const GiftCode = require('../models/GiftCode');
@@ -25,7 +27,7 @@ const { formatToman, formatDateTime } = require('../utils/format');
 const escapeHtml = require('../utils/html');
 const { promptSkipKeyboard } = require('../keyboards/main');
 const { publishChannelPayload, publishStoredChannelPost } = require('../services/channelPostService');
-const { parseOffsetMinutes, parseScheduleInput, formatScheduledAt } = require('../utils/schedule');
+const { parseOffsetMinutes, parseDateInput, parseTimeInput, combineSchedule, formatScheduledAt } = require('../utils/schedule');
 
 const PAGE_SIZE = 8;
 const adminBack = [[{ text: '🔙 بازگشت', callback_data: 'admin_home' }, { text: '🏠 منوی اصلی پنل', callback_data: 'admin_home' }]];
@@ -59,6 +61,7 @@ function adminMenu() {
     [{ text: '💳 پرداخت‌ها', callback_data: 'a_payments_1' }, { text: '👥 کاربران', callback_data: 'a_users_1' }],
     [{ text: '🎟 کدهای تخفیف', callback_data: 'a_codes_1' }, { text: '📢 پیام همگانی', callback_data: 'a_broadcast' }],
     [{ text: '📣 ارسال پست کانال', callback_data: 'a_channel_post' }, { text: '🕒 پست‌های زمان‌بندی‌شده', callback_data: 'a_scheduled_1' }],
+    [{ text: '📢 مدیریت عضویت اجباری', callback_data: 'a_required_channels' }],
     [{ text: '🛡 مدیریت ادمین‌ها', callback_data: 'a_admins' }]
   ] };
 }
@@ -213,10 +216,63 @@ function registerAdminHandlers(bot) {
     const prompt = await Prompt.findOne({ _id: ctx.match[1], isDeleted: { $ne: true } });
     if (!prompt) return ctx.answerCbQuery('پرامپت پیدا نشد.', { show_alert: true });
     await ctx.answerCbQuery();
-    setState(ctx.from.id, 'admin_prompt', { step: 'title', mode: 'edit', promptId: prompt._id, data: prompt.toObject() });
-    return ctx.reply('✏️ ویرایش شروع شد.\n\nعنوان جدید را بفرست یا «همان» بنویس تا مقدار فعلی حفظ شود.', {
-      reply_markup: { inline_keyboard: [[{ text: '❌ لغو عملیات', callback_data: 'cancel_input', style: 'danger' }], [{ text: '🔙 بازگشت به پرامپت‌ها', callback_data: 'a_prompts_1' }]] }
-    });
+    return ctx.reply('✏️ <b>کدام بخش پرامپت را می‌خواهی تغییر دهی؟</b>', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [
+      [{ text: '📝 عنوان', callback_data: `prompt_field_${prompt._id}_title` }, { text: '🔗 اسلاگ', callback_data: `prompt_field_${prompt._id}_slug` }],
+      [{ text: '📄 متن پرامپت', callback_data: `prompt_field_${prompt._id}_promptText` }],
+      [{ text: '💡 نکته استفاده', callback_data: `prompt_field_${prompt._id}_usageTip` }, { text: '🛠 ابزارها', callback_data: `prompt_field_${prompt._id}_tools` }],
+      [{ text: '🔗 لینک پست', callback_data: `prompt_field_${prompt._id}_channelPostUrl` }, { text: '🖼 عکس نمونه', callback_data: `prompt_field_${prompt._id}_imageFileId` }],
+      [{ text: '📊 فعال/غیرفعال', callback_data: `prompt_field_toggle_${prompt._id}` }],
+      [{ text: '🔙 بازگشت', callback_data: `a_prompt_${prompt._id}` }]
+    ] } });
+  });
+
+
+  bot.action(/^prompt_field_([a-f0-9]{24})_(title|slug|promptText|usageTip|tools|channelPostUrl|imageFileId)$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const [, promptId, field] = ctx.match;
+    const prompt = await Prompt.findById(promptId);
+    if (!prompt) return ctx.answerCbQuery('پرامپت پیدا نشد.', { show_alert: true });
+    await ctx.answerCbQuery();
+    setState(ctx.from.id, 'prompt_field_edit', { promptId, field });
+    if (field === 'imageFileId') return ctx.reply('🖼 عکس جدید را بفرست یا یکی از گزینه‌ها را انتخاب کن.', { reply_markup: { inline_keyboard: [
+      [{ text: '🗑 حذف عکس فعلی', callback_data: `prompt_field_delete_${promptId}_imageFileId`, style: 'danger' }],
+      [{ text: '❌ انصراف', callback_data: `a_prompt_${promptId}` }]
+    ] } });
+    if (field === 'usageTip') return ctx.reply(`💡 نکته فعلی:\n${prompt.usageTip || 'ندارد'}\n\nمتن جدید را بفرست یا گزینه آماده را بزن.`, { reply_markup: { inline_keyboard: [
+      [{ text: '🖼 ارسال عکس واضح', callback_data: `prompt_field_preset_${promptId}_tip1` }],
+      [{ text: '✨ متن کامل‌تر', callback_data: `prompt_field_preset_${promptId}_tip2` }],
+      [{ text: '🗑 حذف نکته', callback_data: `prompt_field_delete_${promptId}_usageTip` }],
+      [{ text: '❌ انصراف', callback_data: `a_prompt_${promptId}` }]
+    ] } });
+    if (field === 'tools') return ctx.reply(`🛠 ابزارهای فعلی:\n${(prompt.tools || []).join('، ') || 'ندارد'}\n\nابزارهای جدید را با ویرگول بفرست یا گزینه آماده را بزن.`, { reply_markup: { inline_keyboard: [
+      [{ text: '🍌 Nano Banana + ChatGPT', callback_data: `prompt_field_preset_${promptId}_tools` }],
+      [{ text: '🗑 حذف ابزارها', callback_data: `prompt_field_delete_${promptId}_tools` }],
+      [{ text: '❌ انصراف', callback_data: `a_prompt_${promptId}` }]
+    ] } });
+    const labels = { title:'عنوان', slug:'اسلاگ', promptText:'متن پرامپت', channelPostUrl:'لینک پست' };
+    return ctx.reply(`✏️ ${labels[field]} جدید را بفرست.\n\nمقدار فعلی:\n${prompt[field] || 'ندارد'}`);
+  });
+
+  bot.action(/^prompt_field_toggle_([a-f0-9]{24})$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const prompt = await Prompt.findById(ctx.match[1]); if (!prompt) return;
+    prompt.isActive = !prompt.isActive; await prompt.save(); await ctx.answerCbQuery('وضعیت تغییر کرد.');
+    return ctx.reply(`✅ وضعیت پرامپت: ${prompt.isActive ? 'فعال' : 'غیرفعال'}`, { reply_markup: { inline_keyboard: [[{ text:'🔙 بازگشت', callback_data:`a_prompt_${prompt._id}` }]] } });
+  });
+
+  bot.action(/^prompt_field_delete_([a-f0-9]{24})_(imageFileId|usageTip|tools)$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const [, id, field] = ctx.match; const update = field === 'tools' ? { $set: { tools: [] } } : { $set: { [field]: null } };
+    await Prompt.findByIdAndUpdate(id, update, { runValidators: true }); clearState(ctx.from.id); await ctx.answerCbQuery('حذف شد.');
+    return ctx.reply('✅ فقط همین بخش حذف شد.', { reply_markup: { inline_keyboard: [[{ text:'🔙 بازگشت به پرامپت', callback_data:`a_prompt_${id}` }]] } });
+  });
+
+  bot.action(/^prompt_field_preset_([a-f0-9]{24})_(tip1|tip2|tools)$/, async ctx => {
+    if (!(await guard(ctx, 'prompts'))) return;
+    const [, id, preset] = ctx.match;
+    const value = preset === 'tip1' ? { usageTip:'یک عکس واضح از سوژه برای هوش مصنوعی بفرست و خروجی بگیر' } : preset === 'tip2' ? { usageTip:'برای نتیجه بهتر یک عکس واضح و مناسب از خودتون به همراه پرامپت برای هوش مصنوعی بفرستید' } : { tools:['Nano Banana','ChatGPT'] };
+    await Prompt.findByIdAndUpdate(id, { $set:value }, { runValidators:true }); clearState(ctx.from.id); await ctx.answerCbQuery('ثبت شد.');
+    return ctx.reply('✅ مقدار آماده ثبت شد.', { reply_markup:{ inline_keyboard:[[{text:'🔙 بازگشت به پرامپت',callback_data:`a_prompt_${id}`}]] } });
   });
 
   bot.action(/^a_prompt_delete_([a-f0-9]{24})$/, async ctx => {
@@ -659,6 +715,19 @@ ${escapeHtml(String(request.text).slice(0,200))}
     return showAdmin(ctx);
   });
 
+
+  bot.action('a_required_channels', async ctx => {
+    if (!isOwner(ctx.from.id)) return ctx.answerCbQuery('فقط مالک ربات.',{show_alert:true});
+    const setting=await Setting.findOne({key:'forcedMembershipEnabled'}).lean(); const enabled=setting?setting.value!==false:true; const channels=await RequiredChannel.find().sort({sortOrder:1});
+    const rows=channels.map(c=>[{text:`${c.isActive?'✅':'⛔'} ${c.title}`,callback_data:`required_toggle_${c._id}`},{text:'🗑',callback_data:`required_delete_${c._id}`}]);
+    rows.push([{text:'➕ افزودن کانال',callback_data:'required_add'}],[{text:enabled?'⏸ غیرفعال‌کردن کل سیستم':'▶️ فعال‌کردن کل سیستم',callback_data:'required_global_toggle'}],adminBack[0]);
+    await ctx.answerCbQuery().catch(()=>{}); return ctx.editMessageText(`📢 <b>مدیریت عضویت اجباری</b>\n\nوضعیت کلی: ${enabled?'فعال ✅':'غیرفعال ⛔'}\nتعداد کانال‌ها: ${channels.length}`,{parse_mode:'HTML',reply_markup:{inline_keyboard:rows}}).catch(()=>ctx.reply('مدیریت عضویت اجباری',{reply_markup:{inline_keyboard:rows}}));
+  });
+  bot.action('required_global_toggle',async ctx=>{if(!isOwner(ctx.from.id))return;const row=await Setting.findOne({key:'forcedMembershipEnabled'});const enabled=row?row.value!==false:true;await Setting.findOneAndUpdate({key:'forcedMembershipEnabled'},{$set:{value:!enabled}},{upsert:true});await ctx.answerCbQuery('تغییر کرد.');return ctx.reply(`✅ عضویت اجباری ${!enabled?'فعال':'غیرفعال'} شد.`,{reply_markup:{inline_keyboard:[[{text:'🔙 بازگشت',callback_data:'a_required_channels'}]]}});});
+  bot.action('required_add',async ctx=>{if(!isOwner(ctx.from.id))return;setState(ctx.from.id,'required_channel_add',{step:'title',data:{}});await ctx.answerCbQuery();return ctx.reply('نام نمایشی کانال را بفرست.');});
+  bot.action(/^required_toggle_([a-f0-9]{24})$/,async ctx=>{if(!isOwner(ctx.from.id))return;const c=await RequiredChannel.findById(ctx.match[1]);if(!c)return;c.isActive=!c.isActive;await c.save();await ctx.answerCbQuery('تغییر کرد.');return ctx.reply(`✅ ${c.title}: ${c.isActive?'فعال':'غیرفعال'}`,{reply_markup:{inline_keyboard:[[{text:'🔙 بازگشت',callback_data:'a_required_channels'}]]}});});
+  bot.action(/^required_delete_([a-f0-9]{24})$/,async ctx=>{if(!isOwner(ctx.from.id))return;await RequiredChannel.findByIdAndDelete(ctx.match[1]);await ctx.answerCbQuery('حذف شد.');return ctx.reply('✅ کانال حذف شد.',{reply_markup:{inline_keyboard:[[{text:'🔙 بازگشت',callback_data:'a_required_channels'}]]}});});
+
   bot.action('a_broadcast',async ctx=>{if(!(await guard(ctx,'broadcast')))return;setState(ctx.from.id,'broadcast',{step:'message'});await ctx.answerCbQuery();return ctx.reply('پیام نهایی را بفرست؛ بعد پیش‌نمایش و تأیید می‌گیری.');});
   bot.action('broadcast_confirm',async ctx=>{if(!(await guard(ctx,'broadcast')))return;const state=getState(ctx.from.id);if(!state||state.type!=='broadcast_preview')return;const users=await User.find({isBlocked:false});let ok=0,fail=0;for(const u of users){try{await ctx.telegram.copyMessage(u.telegramId,state.data.chatId,state.data.messageId);ok++;}catch{fail++;}}clearState(ctx.from.id);await ctx.answerCbQuery();return ctx.reply(`✅ ارسال شد\nموفق: ${ok}\nناموفق: ${fail}`);});
 
@@ -812,15 +881,24 @@ ${escapeHtml(String(request.text).slice(0,200))}
   bot.action('channel_schedule', async ctx => {
     if (!(await guard(ctx, 'channelPosts'))) return;
     const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_preview') return;
-    setState(ctx.from.id, 'channel_post', { step: 'schedule_datetime', data: s.data });
+    setState(ctx.from.id, 'channel_post', { step: 'schedule_date', data: s.data });
     await ctx.answerCbQuery();
-    return ctx.reply(`🕒 تاریخ و ساعت انتشار را با این قالب بفرست:\n\n<code>2026-07-20 18:30</code>\n\nزمان بر اساس UTC${env.scheduleUtcOffset} محاسبه می‌شود.`, { parse_mode: 'HTML' });
+    return ctx.reply('📅 تاریخ انتشار را بفرست.\n\nنمونه شمسی: <code>1405/05/10</code>\nنمونه میلادی: <code>2026/07/25</code>\nاعداد فارسی و انگلیسی پذیرفته می‌شوند.', { parse_mode:'HTML' });
+  });
+
+
+  bot.action('channel_schedule_change_date', async ctx => { const st=getState(ctx.from.id); if(!st)return; const flow=st.data; flow.step='schedule_date'; setState(ctx.from.id,'channel_post',flow); await ctx.answerCbQuery(); return ctx.reply('📅 تاریخ جدید را بفرست. نمونه: 1405/05/10'); });
+  bot.action('channel_schedule_change_time', async ctx => { const st=getState(ctx.from.id); if(!st)return; const flow=st.data; flow.step='schedule_time'; setState(ctx.from.id,'channel_post',flow); await ctx.answerCbQuery(); return ctx.reply('🕘 ساعت جدید را بفرست. نمونه: 21:30'); });
+  bot.action('channel_schedule_confirm', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return; const st=getState(ctx.from.id); if(!st||st.type!=='channel_post_confirm_schedule') return ctx.answerCbQuery('فرایند منقضی شده.',{show_alert:true});
+    const flow=st.data, data=flow.data; const post=await ChannelPost.create({type:data.type,fileId:data.fileId||null,mediaFileIds:data.mediaFileIds||[],caption:data.caption,sourceChatId:data.sourceChatId||null,sourceMessageId:data.sourceMessageId||null,entities:data.entities||[],captionEntities:data.captionEntities||[],buttonRows:data.buttonRows||[],channelUsername:env.channelUsername,status:'scheduled',scheduledAt:new Date(flow.scheduledAt),createdBy:ctx.from.id});
+    clearState(ctx.from.id); await ctx.answerCbQuery('زمان‌بندی شد.'); return ctx.reply(`✅ پست زمان‌بندی شد.\n\n🕒 ${formatScheduledAt(post.scheduledAt,scheduleOffsetMinutes())}\n📌 ${post._id}`,{reply_markup:{inline_keyboard:[[{text:'🕒 مدیریت زمان‌بندی‌ها',callback_data:'a_scheduled_1'}]]}});
   });
 
   bot.action('channel_publish', async ctx => {
     if (!(await guard(ctx, 'channelPosts'))) return;
-    const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_preview') return;
-    const d = s.data;
+    const s = getState(ctx.from.id); if (!s || !['channel_post_preview','channel_post_confirm_schedule'].includes(s.type)) return;
+    const d = s.type === 'channel_post_confirm_schedule' ? s.data.data : s.data;
     try {
       const result = await publishChannelPayload(ctx.telegram, { ...d, channelUsername: env.channelUsername });
       await ChannelPost.create({
@@ -828,6 +906,7 @@ ${escapeHtml(String(request.text).slice(0,200))}
         fileId: d.fileId || null,
         mediaFileIds: d.mediaFileIds || [],
         caption: d.caption,
+        sourceChatId: d.sourceChatId || null, sourceMessageId: d.sourceMessageId || null, entities:d.entities||[], captionEntities:d.captionEntities||[],
         buttonRows: d.buttonRows || [],
         channelUsername: env.channelUsername,
         status: 'published',
@@ -891,9 +970,9 @@ ${escapeHtml(String(request.text).slice(0,200))}
     if (!(await guard(ctx, 'channelPosts'))) return;
     const post = await ChannelPost.findById(ctx.match[1]);
     if (!post || post.status !== 'scheduled') return ctx.answerCbQuery('پست پیدا نشد.', { show_alert: true });
-    setState(ctx.from.id, 'channel_reschedule', { postId: String(post._id) });
+    setState(ctx.from.id, 'channel_reschedule', { step:'date', postId: String(post._id) });
     await ctx.answerCbQuery();
-    return ctx.reply(`🕒 زمان جدید را بفرست.\nمثال: <code>2026-07-20 21:00</code>\nUTC${env.scheduleUtcOffset}`, { parse_mode: 'HTML' });
+    return ctx.reply('📅 تاریخ جدید را بفرست. نمونه: <code>1405/05/10</code>', { parse_mode:'HTML' });
   });
 
   bot.action(/^scheduled_cancel_([a-f0-9]{24})$/, async ctx => {
@@ -971,11 +1050,34 @@ ${escapeHtml(String(request.text).slice(0,200))}
     });
   });
 
+
+  bot.action('prompt_tip_clear', ctx => skipPromptStep(ctx, 'tip', 'tools', d => { d.usageTip = null; }, '🛠 ابزارها را بنویس یا گزینه آماده را انتخاب کن.', { reply_markup:{inline_keyboard:[[{text:'🍌 Nano Banana + ChatGPT',callback_data:'prompt_tools_default'}],[{text:'⏭ بدون ابزار',callback_data:'prompt_tools_clear'}],[{text:'❌ لغو',callback_data:'cancel_input'}]]} }));
+  bot.action('prompt_tip_1', ctx => skipPromptStep(ctx, 'tip', 'tools', d => { d.usageTip='یک عکس واضح از سوژه برای هوش مصنوعی بفرست و خروجی بگیر'; }, '✅ نکته ثبت شد. ابزارها را انتخاب یا تایپ کن.', { reply_markup:{inline_keyboard:[[{text:'🍌 Nano Banana + ChatGPT',callback_data:'prompt_tools_default'}],[{text:'⏭ بدون ابزار',callback_data:'prompt_tools_clear'}]]} }));
+  bot.action('prompt_tip_2', ctx => skipPromptStep(ctx, 'tip', 'tools', d => { d.usageTip='برای نتیجه بهتر یک عکس واضح و مناسب از خودتون به همراه پرامپت برای هوش مصنوعی بفرستید'; }, '✅ نکته ثبت شد. ابزارها را انتخاب یا تایپ کن.', { reply_markup:{inline_keyboard:[[{text:'🍌 Nano Banana + ChatGPT',callback_data:'prompt_tools_default'}],[{text:'⏭ بدون ابزار',callback_data:'prompt_tools_clear'}]]} }));
+  bot.action('prompt_tools_default', ctx => skipPromptStep(ctx, 'tools', 'post', d => { d.tools=['Nano Banana','ChatGPT']; }, '🔗 لینک پست اصلی کانال را بفرست.', { reply_markup:promptSkipKeyboard('post') }));
+  bot.action('prompt_tools_clear', ctx => skipPromptStep(ctx, 'tools', 'post', d => { d.tools=[]; }, '🔗 لینک پست اصلی کانال را بفرست.', { reply_markup:promptSkipKeyboard('post') }));
+
   bot.action(/^support_reply_(.+)$/,async ctx=>{if(!isOwner(ctx.from.id))return;setState(ctx.from.id,'support_reply',{ticketId:ctx.match[1]});await ctx.answerCbQuery();return ctx.reply('پاسخ را بنویس.');});
 
   bot.on('message', async (ctx,next)=>{
     if(!(await isAdmin(ctx.from.id)))return next(); const state=getState(ctx.from.id); if(!state)return next(); const text=ctx.message.text?.trim();
     if(text?.startsWith('/')){clearState(ctx.from.id);return next();}
+    if (state.type === 'required_channel_add') {
+      const f=state.data;
+      if(f.step==='title'){f.data.title=text;f.step='chatId';setState(ctx.from.id,'required_channel_add',f);return ctx.reply('شناسه کانال را بفرست. مثال: @SiniorAi');}
+      if(f.step==='chatId'){f.data.chatId=text;f.step='inviteLink';setState(ctx.from.id,'required_channel_add',f);return ctx.reply('لینک عضویت کانال را بفرست.');}
+      if(f.step==='inviteLink'){if(!/^https?:\/\//i.test(text))return ctx.reply('لینک معتبر بفرست.');try{await ctx.telegram.getChat(f.data.chatId);}catch(e){return ctx.reply('❌ ربات به این کانال دسترسی ندارد. ابتدا ربات را ادمین کن و دوباره لینک را بفرست.');}await RequiredChannel.create({...f.data,inviteLink:text,createdBy:ctx.from.id});clearState(ctx.from.id);return ctx.reply('✅ کانال عضویت اجباری اضافه شد.',{reply_markup:{inline_keyboard:[[{text:'🔙 مدیریت کانال‌ها',callback_data:'a_required_channels'}]]}});}
+    }
+    if (state.type === 'prompt_field_edit') {
+      const { promptId, field } = state.data;
+      if (field === 'imageFileId') { const fileId=ctx.message.photo?.at(-1)?.file_id; if(!fileId)return ctx.reply('یک عکس معتبر بفرست.'); await Prompt.findByIdAndUpdate(promptId,{$set:{imageFileId:fileId}},{runValidators:true}); }
+      else if (!text) return ctx.reply('مقدار را به‌صورت متن بفرست.');
+      else if (field === 'tools') await Prompt.findByIdAndUpdate(promptId,{$set:{tools:text.split(/[,،]/).map(x=>x.trim()).filter(Boolean)}},{runValidators:true});
+      else if (field === 'slug') { const slug=text.toLowerCase().trim().replace(/[^a-z0-9-_]+/g,'-').replace(/^-+|-+$/g,''); if(!slug)return ctx.reply('اسلاگ معتبر نیست.'); await Prompt.findByIdAndUpdate(promptId,{$set:{slug}},{runValidators:true}); }
+      else if (field === 'channelPostUrl' && text !== 'ندارد' && !/^https:\/\/t\.me\//i.test(text)) return ctx.reply('لینک معتبر تلگرام بفرست یا «ندارد».');
+      else await Prompt.findByIdAndUpdate(promptId,{$set:{[field]: text === 'ندارد' ? null : text}},{runValidators:true});
+      clearState(ctx.from.id); return ctx.reply('✅ فقط همین بخش با موفقیت تغییر کرد.',{reply_markup:{inline_keyboard:[[{text:'🔙 بازگشت به پرامپت',callback_data:`a_prompt_${promptId}`}]]}});
+    }
     if (state.type === 'admin_prompt') {
       const flow = state.data;
       const draft = flow.data || (flow.data = {});
@@ -1005,7 +1107,7 @@ ${escapeHtml(String(request.text).slice(0,200))}
         if (text !== 'همان') draft.promptText = text;
         flow.step = 'tip';
         setState(ctx.from.id, 'admin_prompt', flow);
-        return ctx.reply('💡 نکته استفاده بهتر را بنویس.\nمثال: «نام Sara را با نام دلخواهت جایگزین کن.»', { reply_markup: promptSkipKeyboard('tip') });
+        return ctx.reply('💡 نکته‌ای برای استفاده بهتر از این پرامپت بنویس یا گزینه آماده را انتخاب کن.', { reply_markup: { inline_keyboard: [[{text:'🖼 ارسال عکس واضح',callback_data:'prompt_tip_1'}],[{text:'✨ متن کامل‌تر',callback_data:'prompt_tip_2'}],[{text:'⏭ بدون نکته',callback_data:'prompt_tip_clear'}],[{text:'❌ لغو',callback_data:'cancel_input'}]] } });
       }
 
       if (step === 'tip') {
@@ -1013,7 +1115,7 @@ ${escapeHtml(String(request.text).slice(0,200))}
         if (text !== 'همان') draft.usageTip = text === 'ندارد' ? null : text;
         flow.step = 'tools';
         setState(ctx.from.id, 'admin_prompt', flow);
-        return ctx.reply('🧪 ابزارهای تست‌شده را با ویرگول بنویس.\nمثال: <code>Gemini, ChatGPT</code>', { parse_mode: 'HTML' });
+        return ctx.reply('🛠 این پرامپت با چه ابزارهایی تست شده؟ ابزارها را تایپ کن یا گزینه آماده را بزن.', { reply_markup:{inline_keyboard:[[{text:'🍌 Nano Banana + ChatGPT',callback_data:'prompt_tools_default'}],[{text:'⏭ بدون ابزار',callback_data:'prompt_tools_clear'}],[{text:'❌ لغو',callback_data:'cancel_input'}]]} });
       }
 
       if (step === 'tools') {
@@ -1091,6 +1193,7 @@ ${escapeHtml(String(request.text).slice(0,200))}
         if (data.type === 'photo' && !ctx.message.photo) return ctx.reply('عکس بفرست.');
         if (data.type === 'video' && !ctx.message.video) return ctx.reply('ویدیو بفرست.');
         data.fileId = ctx.message.photo?.at(-1)?.file_id || ctx.message.video?.file_id;
+        data.sourceChatId = String(ctx.chat.id); data.sourceMessageId = ctx.message.message_id;
         flow.step = 'caption';
         setState(ctx.from.id, 'channel_post', flow);
         return ctx.reply('📝 کپشن نهایی را بفرست. می‌توانی از HTML ساده مثل <b>Bold</b> استفاده کنی.');
@@ -1098,31 +1201,30 @@ ${escapeHtml(String(request.text).slice(0,200))}
 
       if (step === 'caption') {
         data.caption = text || ctx.message.caption || '';
+        data.entities = ctx.message.entities || []; data.captionEntities = ctx.message.caption_entities || [];
+        data.sourceChatId = String(ctx.chat.id); data.sourceMessageId = ctx.message.message_id;
         if (!data.caption) return ctx.reply('متن یا کپشن پست را بفرست.');
         setState(ctx.from.id, 'channel_post_builder', data);
         return ctx.reply('✅ محتوای اصلی پست ثبت شد. حالا می‌توانی چند دکمه لینک‌دار اضافه کنی یا مستقیم پیش‌نمایش را ببینی.', { reply_markup: channelBuilderKeyboard(data) });
       }
 
-      if (step === 'schedule_datetime') {
-        const scheduledAt = parseScheduleInput(text, scheduleOffsetMinutes());
-        if (!scheduledAt) return ctx.reply('فرمت تاریخ درست نیست. مثال: 2026-07-20 18:30');
-        if (scheduledAt <= new Date()) return ctx.reply('زمان انتشار باید در آینده باشد.');
-        const post = await ChannelPost.create({
-          type: data.type,
-          fileId: data.fileId || null,
-          mediaFileIds: data.mediaFileIds || [],
-          caption: data.caption,
-          buttonRows: data.buttonRows || [],
-          channelUsername: env.channelUsername,
-          status: 'scheduled',
-          scheduledAt,
-          createdBy: ctx.from.id
-        });
-        clearState(ctx.from.id);
-        return ctx.reply(`✅ پست زمان‌بندی شد.
+      if (step === 'schedule_date') {
+        const parsed = parseDateInput(text); if (!parsed.ok) return ctx.reply(`❌ ${parsed.error}`);
+        flow.scheduleDate = parsed; flow.step = 'schedule_time'; setState(ctx.from.id, 'channel_post', flow);
+        return ctx.reply(`✅ تاریخ ثبت شد: ${parsed.normalized}
 
-🕒 زمان انتشار: ${formatScheduledAt(post.scheduledAt, scheduleOffsetMinutes())}
-📌 شناسه: ${post._id}`, { reply_markup: { inline_keyboard: [[{ text: '🕒 مدیریت زمان‌بندی‌ها', callback_data: 'a_scheduled_1' }], adminBack[0]] } });
+🕘 حالا ساعت انتشار را بفرست. نمونه: <code>21:30</code>`, { parse_mode:'HTML' });
+      }
+      if (step === 'schedule_time') {
+        const parsed = parseTimeInput(text); if (!parsed.ok) return ctx.reply(`❌ ${parsed.error}`);
+        const scheduledAt = combineSchedule(flow.scheduleDate, parsed, scheduleOffsetMinutes());
+        if (scheduledAt <= new Date()) return ctx.reply('❌ زمان انتشار باید در آینده باشد. ساعت دیگری بفرست.');
+        flow.scheduleTime = parsed; flow.scheduledAt = scheduledAt.toISOString(); setState(ctx.from.id, 'channel_post_confirm_schedule', flow);
+        return ctx.reply(`📋 زمان انتشار را بررسی کن:
+
+📅 ${flow.scheduleDate.normalized}
+🕘 ${parsed.normalized}
+🌍 ساعت ایران`, { reply_markup:{inline_keyboard:[[{text:'✅ زمان‌بندی انتشار',callback_data:'channel_schedule_confirm',style:'success'}],[{text:'✏️ تغییر تاریخ',callback_data:'channel_schedule_change_date'},{text:'🕘 تغییر ساعت',callback_data:'channel_schedule_change_time'}],[{text:'🚀 انتشار فوری',callback_data:'channel_publish',style:'primary'}],[{text:'❌ لغو',callback_data:'cancel_input'}]]} });
       }
 
       if (step === 'button_text') {
@@ -1150,18 +1252,10 @@ ${escapeHtml(String(request.text).slice(0,200))}
     }
 
     if (state.type === 'channel_reschedule') {
-      const scheduledAt = parseScheduleInput(text, scheduleOffsetMinutes());
-      if (!scheduledAt) return ctx.reply('فرمت تاریخ درست نیست. مثال: 2026-07-20 21:00');
-      if (scheduledAt <= new Date()) return ctx.reply('زمان جدید باید در آینده باشد.');
-      const post = await ChannelPost.findOneAndUpdate(
-        { _id: state.data.postId, status: 'scheduled' },
-        { scheduledAt },
-        { new: true }
-      );
-      clearState(ctx.from.id);
-      if (!post) return ctx.reply('پست پیدا نشد یا وضعیتش تغییر کرده است.');
-      return ctx.reply(`✅ زمان انتشار تغییر کرد.
-🕒 ${formatScheduledAt(post.scheduledAt, scheduleOffsetMinutes())}`, { reply_markup: { inline_keyboard: [[{ text: '🕒 بازگشت به زمان‌بندی‌ها', callback_data: 'a_scheduled_1' }], adminBack[0]] } });
+      if (state.data.step === 'date') { const d=parseDateInput(text); if(!d.ok)return ctx.reply(`❌ ${d.error}`); state.data.date=d; state.data.step='time'; setState(ctx.from.id,'channel_reschedule',state.data); return ctx.reply('🕘 ساعت جدید را بفرست. نمونه: 21:30'); }
+      const t=parseTimeInput(text); if(!t.ok)return ctx.reply(`❌ ${t.error}`); const scheduledAt=combineSchedule(state.data.date,t,scheduleOffsetMinutes()); if(scheduledAt<=new Date())return ctx.reply('زمان جدید باید در آینده باشد.');
+      const post=await ChannelPost.findOneAndUpdate({_id:state.data.postId,status:'scheduled'},{$set:{scheduledAt}},{new:true}); clearState(ctx.from.id); if(!post)return ctx.reply('پست پیدا نشد.'); return ctx.reply(`✅ زمان انتشار تغییر کرد.
+🕒 ${formatScheduledAt(post.scheduledAt,scheduleOffsetMinutes())}`);
     }
     if(state.type==='support_reply'){const ticket=await SupportTicket.findById(state.data.ticketId);if(!ticket)return;await ctx.telegram.sendMessage(ticket.userTelegramId,`💬 پاسخ پشتیبانی Sinior Ai:\n\n${text}`).catch(()=>{});ticket.status='answered';ticket.answeredBy=ctx.from.id;ticket.answeredAt=new Date();ticket.answerText=text;await ticket.save();clearState(ctx.from.id);return ctx.reply('✅ پاسخ ارسال شد.');}
     return next();

@@ -58,11 +58,11 @@ function promptButtons(prompt, isFavorite = false) {
   return { inline_keyboard: rows };
 }
 
-function joinButtons() {
-  const rows = env.requiredChannels
+function joinButtons(channels = env.requiredChannels) {
+  const rows = channels
     .map((channel, index) => {
-      const url = normalizeTelegramUrl(channel.url, channel.username);
-      return url ? [{ text: `عضویت در کانال ${index + 1}`, url, style: 'primary' }] : null;
+      const url = normalizeTelegramUrl(channel.inviteLink || channel.url, channel.chatId || channel.username);
+      return url ? [{ text: channel.title ? `📢 ${channel.title}` : `عضویت در کانال ${index + 1}`, url, style: 'primary' }] : null;
     })
     .filter(Boolean);
 
