@@ -1,6 +1,6 @@
 {
   "name": "sinioraibot",
-  "version": "5.6.0",
+  "version": "5.6.1",
   "private": true,
   "description": "SiniorAi Telegram bot v5.6.0 with reliable channel post composer, formatting preservation and cover-gallery albums",
   "main": "src/index.js",

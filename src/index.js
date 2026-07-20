@@ -39,7 +39,8 @@ bot.catch((error, ctx) => {
 const internalPort = Number(process.env.PORT || process.env.HTTP_PORT || 3000);
 
 const server = http.createServer((req, res) => {
-  const path = (req.url || '/').split('?')[0];
+  const rawPath = (req.url || '/').split('?')[0];
+  const path = rawPath.length > 1 ? rawPath.replace(/\/+$/, '') : rawPath;
 
   if (path === '/' || path === '/bot' || path === '/health') {
     res.writeHead(200, {
