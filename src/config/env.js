@@ -7,11 +7,22 @@ for (const key of required) {
 
 const clean = (value) => String(value || '').replace('@', '').trim();
 const num = (value, fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback;
-const requiredChannels = (process.env.REQUIRED_CHANNELS || process.env.CHANNEL_USERNAME)
-  .split(',')
-  .map(clean)
+const requiredChannelNames = [
+  process.env.REQUIRED_CHANNELS,
+  process.env.CHANNELS, // legacy cPanel variable
+  process.env.CHANNEL_USERNAME
+]
   .filter(Boolean)
-  .map(username => ({ username: `@${username}`, url: `https://t.me/${username}` }));
+  .flatMap(value => String(value).split(','))
+  .map(clean)
+  .filter(Boolean);
+
+const requiredChannels = [...new Map(
+  requiredChannelNames.map(username => [username.toLowerCase(), {
+    username: `@${username}`,
+    url: `https://t.me/${username}`
+  }])
+).values()];
 
 const env = {
   botToken: process.env.BOT_TOKEN,
@@ -22,6 +33,7 @@ const env = {
   channelUsername: `@${clean(process.env.CHANNEL_USERNAME)}`,
   channelUrl: process.env.CHANNEL_URL,
   requiredChannels,
+  forceJoinExemptIds: (process.env.FORCE_JOIN_EXEMPT_IDS || '').split(',').map(v => Number(v.trim())).filter(Boolean),
 
   freeDailyLimit: num(process.env.FREE_DAILY_LIMIT, 3),
   vipDailyLimit: num(process.env.VIP_DAILY_LIMIT, 10),

@@ -1,8 +1,15 @@
 const ChannelPost = require('../models/ChannelPost');
 
+function cleanButton(button) {
+  const result = { text: button.text, url: button.url };
+  if (button.style && button.style !== 'default') result.style = button.style;
+  if (button.iconCustomEmojiId) result.icon_custom_emoji_id = button.iconCustomEmojiId;
+  return result;
+}
+
 function replyMarkup(buttonRows = []) {
   return Array.isArray(buttonRows) && buttonRows.length
-    ? { inline_keyboard: buttonRows }
+    ? { inline_keyboard: buttonRows.map(row => row.map(cleanButton)) }
     : undefined;
 }
 
@@ -32,21 +39,22 @@ async function publishChannelPayload(telegram, payload) {
     const media = ids.map((fileId, index) => ({
       type: 'photo',
       media: fileId,
-      ...(index === 0 ? { caption: payload.caption, parse_mode: 'HTML' } : {})
+      ...(index === 0 ? {
+        caption: payload.caption,
+        ...(payload.captionEntities?.length
+          ? { caption_entities: payload.captionEntities }
+          : { parse_mode: 'HTML' })
+      } : {})
     }));
 
     const sent = await telegram.sendMediaGroup(channel, media);
     messageIds.push(...sent.map(item => item.message_id));
     messageId = sent[0]?.message_id || null;
 
-    // Telegram media groups cannot carry an inline keyboard. Send buttons as a compact companion message.
-    if (buttons) {
-      const buttonMessage = await telegram.sendMessage(channel, '🔗 <b>لینک‌های مرتبط با این پست</b>', {
-        parse_mode: 'HTML',
-        reply_markup: buttons
-      });
-      buttonMessageId = buttonMessage.message_id;
-      messageIds.push(buttonMessageId);
+    // Attach the keyboard to the last item of the album instead of sending a separate message.
+    if (buttons && sent.length) {
+      buttonMessageId = sent.at(-1).message_id;
+      await telegram.editMessageReplyMarkup(channel, buttonMessageId, undefined, buttons);
     }
   } else if (payload.type === 'photo') {
     const sent = await telegram.sendPhoto(channel, payload.fileId, {

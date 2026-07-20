@@ -66,7 +66,7 @@ async function deliverBySlug(ctx, slug, source = 'telegram', campaign = null) {
   if (!prompt) return ctx.reply('این پرامپت پیدا نشد.');
   await trackClick({ telegramId: user.telegramId, prompt, source, campaign });
   pendingPrompt.set(user.telegramId, { slug, source, campaign, promptId: prompt._id });
-  if (!isOwner(user.telegramId) && !(await isJoined(ctx, user.telegramId))) { const missing = await getMissingChannels(ctx, user.telegramId); return ctx.reply('🔒 برای استفاده از ربات ابتدا در کانال‌های زیر عضو شو.', { reply_markup: joinButtons(missing) }); }
+  if (!(await isJoined(ctx, user.telegramId))) { const missing = await getMissingChannels(ctx, user.telegramId); return ctx.reply('🔒 برای استفاده از ربات ابتدا در کانال‌های زیر عضو شو.', { reply_markup: joinButtons(missing) }); }
   if (!(await canReceivePrompt(user, prompt._id))) return ctx.reply('🚫 سهمیه امروزت تمام شده. با VIP روزانه ۱۰ پرامپت دریافت کن.', { reply_markup: { inline_keyboard: [[{ text: '👑 خرید VIP', callback_data: 'buy_vip', style: 'primary' }]] } });
   await consumePrompt(user, prompt._id); await track({ telegramId: user.telegramId, promptId: prompt._id, source, campaign, event: 'delivery' }); await validateReferral(user, ctx);
   const favorite = user.favorites.some(id => String(id) === String(prompt._id)); return sendPrompt(ctx, prompt, favorite);

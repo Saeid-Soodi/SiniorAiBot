@@ -89,7 +89,13 @@ function validButtonUrl(value) {
 
 function channelReplyMarkup(data) {
   const rows = Array.isArray(data.buttonRows) ? data.buttonRows : [];
-  return rows.length ? { inline_keyboard: rows } : undefined;
+  if (!rows.length) return undefined;
+  return { inline_keyboard: rows.map(row => row.map(button => {
+    const clean = { text: button.text, url: button.url };
+    if (button.style && button.style !== 'default') clean.style = button.style;
+    if (button.iconCustomEmojiId) clean.icon_custom_emoji_id = button.iconCustomEmojiId;
+    return clean;
+  })) };
 }
 
 function channelBuilderKeyboard(data) {
@@ -125,11 +131,14 @@ async function sendChannelPreview(ctx, data) {
     const media = ids.map((fileId, index) => ({
       type: 'photo',
       media: fileId,
-      ...(index === 0 ? { caption: data.caption, parse_mode: 'HTML' } : {})
+      ...(index === 0 ? {
+        caption: data.caption,
+        ...(data.captionEntities?.length ? { caption_entities: data.captionEntities } : { parse_mode: 'HTML' })
+      } : {})
     }));
-    await ctx.replyWithMediaGroup(media);
-    if (replyMarkup) {
-      return ctx.reply('🔗 <b>پیش‌نمایش دکمه‌های مرتبط</b>', { parse_mode: 'HTML', reply_markup: replyMarkup });
+    const sent = await ctx.replyWithMediaGroup(media);
+    if (replyMarkup && sent.length) {
+      await ctx.telegram.editMessageReplyMarkup(ctx.chat.id, sent.at(-1).message_id, undefined, replyMarkup);
     }
     return;
   }
@@ -821,6 +830,34 @@ ${escapeHtml(String(request.text).slice(0,200))}
     return ctx.reply(`✅ پرامپت انتخاب شد: ${p.title}\n\nعنوان دکمه را بفرست یا «خودکار» بنویس تا این عنوان استفاده شود:\n${data.pendingButton.text}`);
   });
 
+  bot.action(/^channel_style_(default|primary|success|danger)$/, async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_button_style') return;
+    s.data.pendingButton.style = ctx.match[1];
+    setState(ctx.from.id, 'channel_post_button_icon', s.data);
+    await ctx.answerCbQuery();
+    return ctx.reply('✨ برای دکمه آیکون پرمیوم می‌خواهی؟ یک پیام حاوی Custom Emoji بفرست، یا «بدون آیکون» را بزن.', {
+      reply_markup: { inline_keyboard: [[{ text: 'بدون آیکون', callback_data: 'channel_icon_skip' }]] }
+    });
+  });
+
+  async function finishButtonIcon(ctx, data) {
+    setState(ctx.from.id, 'channel_post_place', data);
+    const canSame = data.buttonRows?.length && data.buttonRows.at(-1).length < 2;
+    return ctx.reply('چیدمان این دکمه را انتخاب کن.', { reply_markup: { inline_keyboard: [
+      [{ text: '⬇️ ردیف جدید', callback_data: 'channel_place_new' }],
+      ...(canSame ? [[{ text: '↔️ کنار دکمه قبلی', callback_data: 'channel_place_same' }]] : [])
+    ] } });
+  }
+
+  bot.action('channel_icon_skip', async ctx => {
+    if (!(await guard(ctx, 'channelPosts'))) return;
+    const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_button_icon') return;
+    s.data.pendingButton.iconCustomEmojiId = null;
+    await ctx.answerCbQuery();
+    return finishButtonIcon(ctx, s.data);
+  });
+
   bot.action('channel_place_new', async ctx => {
     if (!(await guard(ctx, 'channelPosts'))) return;
     const s = getState(ctx.from.id); if (!s || s.type !== 'channel_post_place') return;
@@ -1171,6 +1208,14 @@ ${escapeHtml(String(request.text).slice(0,200))}
     if(state.type==='admin_add'){const d=state.data;if(d.step==='id'){const id=Number(text);if(!id)return ctx.reply('آیدی عددی معتبر بفرست.');d.data.telegramId=id;d.step='perms';return ctx.reply('مجوزها را با ویرگول بنویس. مثال: prompts,lessons یا all');}if(d.step==='perms'){const names=['prompts','lessons','payments','users','discounts','broadcast','support','channelPosts','requests','results'];const selected=text.toLowerCase()==='all'?names:text.split(',').map(x=>x.trim()).filter(x=>names.includes(x));const permissions=Object.fromEntries(names.map(n=>[n,selected.includes(n)]));await Admin.findOneAndUpdate({telegramId:d.data.telegramId},{telegramId:d.data.telegramId,title:'ادمین',permissions,isActive:true,createdBy:ctx.from.id},{upsert:true,new:true});clearState(ctx.from.id);return ctx.reply('✅ ادمین و سطح دسترسی ذخیره شد.');}}
     if(state.type==='admin_edit_perms'){const names=['prompts','lessons','payments','users','discounts','broadcast','support','channelPosts','requests','results'];const selected=text.toLowerCase()==='all'?names:text.split(',').map(x=>x.trim()).filter(x=>names.includes(x));const permissions=Object.fromEntries(names.map(n=>[n,selected.includes(n)]));await Admin.findByIdAndUpdate(state.data.id,{permissions});clearState(ctx.from.id);return ctx.reply('✅ مجوزهای ادمین به‌روزرسانی شد.');}
     if(state.type==='broadcast'){setState(ctx.from.id,'broadcast_preview',{chatId:ctx.chat.id,messageId:ctx.message.message_id});return ctx.reply('👁 پیش‌نمایش بالا. برای همه ارسال شود؟',{reply_markup:{inline_keyboard:[[{text:'✅ ارسال همگانی',callback_data:'broadcast_confirm',style:'success'},{text:'❌ لغو',callback_data:'cancel_input',style:'danger'}]]}});}
+    if (state.type === 'channel_post_button_icon') {
+      const entities = [...(ctx.message.entities || []), ...(ctx.message.caption_entities || [])];
+      const custom = entities.find(entity => entity.type === 'custom_emoji' && entity.custom_emoji_id);
+      if (!custom) return ctx.reply('این پیام Custom Emoji ندارد. یک ایموجی پرمیوم بفرست یا دکمه «بدون آیکون» را بزن.');
+      state.data.pendingButton.iconCustomEmojiId = custom.custom_emoji_id;
+      return finishButtonIcon(ctx, state.data);
+    }
+
     if (state.type === 'channel_post') {
       const flow = state.data;
       const data = flow.data || (flow.data = {});
@@ -1238,9 +1283,11 @@ ${escapeHtml(String(request.text).slice(0,200))}
       if (step === 'button_url') {
         if (!validButtonUrl(text)) return ctx.reply('لینک معتبر نیست. یک لینک با http:// یا https:// یا tg:// بفرست.');
         data.pendingButton.url = text;
-        setState(ctx.from.id, 'channel_post_place', data);
-        const canSame = data.buttonRows?.length && data.buttonRows.at(-1).length < 2;
-        return ctx.reply('چیدمان این دکمه را انتخاب کن.', { reply_markup: { inline_keyboard: [[{ text: '⬇️ ردیف جدید', callback_data: 'channel_place_new' }], ...(canSame ? [[{ text: '↔️ کنار دکمه قبلی', callback_data: 'channel_place_same' }]] : [])] } });
+        setState(ctx.from.id, 'channel_post_button_style', data);
+        return ctx.reply('🎨 رنگ دکمه را انتخاب کن.', { reply_markup: { inline_keyboard: [
+          [{ text: 'معمولی', callback_data: 'channel_style_default' }, { text: 'آبی', callback_data: 'channel_style_primary', style: 'primary' }],
+          [{ text: 'سبز', callback_data: 'channel_style_success', style: 'success' }, { text: 'قرمز', callback_data: 'channel_style_danger', style: 'danger' }]
+        ] } });
       }
 
       if (step === 'prompt_button_text') {

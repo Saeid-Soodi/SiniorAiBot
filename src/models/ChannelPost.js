@@ -2,7 +2,9 @@ const mongoose = require('mongoose');
 
 const buttonSchema = new mongoose.Schema({
   text: { type: String, required: true, trim: true },
-  url: { type: String, required: true, trim: true }
+  url: { type: String, required: true, trim: true },
+  style: { type: String, enum: ['primary', 'success', 'danger', 'default'], default: 'default' },
+  iconCustomEmojiId: { type: String, default: null }
 }, { _id: false });
 
 const schema = new mongoose.Schema({
