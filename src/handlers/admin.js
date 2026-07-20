@@ -26,7 +26,7 @@ const { paginationRow } = require('../utils/pagination');
 const { formatToman, formatDateTime } = require('../utils/format');
 const escapeHtml = require('../utils/html');
 const { promptSkipKeyboard } = require('../keyboards/main');
-const { publishChannelPayload, publishStoredChannelPost } = require('../services/channelPostService');
+const { publishChannelPayload, publishStoredChannelPost, errorDescription } = require('../services/channelPostService');
 const { parseOffsetMinutes, parseDateInput, parseTimeInput, combineSchedule, formatScheduledAt } = require('../utils/schedule');
 
 const PAGE_SIZE = 8;
@@ -124,28 +124,43 @@ function addChannelButton(data, button, placement = 'new') {
 }
 
 async function sendChannelPreview(ctx, data) {
-  const extra = { parse_mode: 'HTML' };
   const replyMarkup = channelReplyMarkup(data);
+  const textEntities = Array.isArray(data.entities) ? data.entities : [];
+  const captionEntities = Array.isArray(data.captionEntities) ? data.captionEntities : [];
+
   if (data.type === 'album') {
     const ids = (data.mediaFileIds || []).slice(0, 10);
-    const media = ids.map((fileId, index) => ({
-      type: 'photo',
-      media: fileId,
-      ...(index === 0 ? {
-        caption: data.caption,
-        ...(data.captionEntities?.length ? { caption_entities: data.captionEntities } : { parse_mode: 'HTML' })
-      } : {})
-    }));
-    const sent = await ctx.replyWithMediaGroup(media);
-    if (replyMarkup && sent.length) {
-      await ctx.telegram.editMessageReplyMarkup(ctx.chat.id, sent.at(-1).message_id, undefined, replyMarkup);
-    }
+    if (ids.length < 2) throw new Error('برای آلبوم حداقل ۲ تصویر لازم است.');
+
+    // Same reliable cover + gallery layout used for the real channel post.
+    await ctx.replyWithPhoto(ids[0], {
+      caption: data.caption,
+      ...(captionEntities.length ? { caption_entities: captionEntities } : {}),
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+    });
+
+    const rest = ids.slice(1);
+    if (rest.length === 1) await ctx.replyWithPhoto(rest[0]);
+    else if (rest.length > 1) await ctx.replyWithMediaGroup(rest.map(fileId => ({ type: 'photo', media: fileId })));
     return;
   }
-  if (replyMarkup) extra.reply_markup = replyMarkup;
-  if (data.type === 'photo') return ctx.replyWithPhoto(data.fileId, { caption: data.caption, ...extra });
-  if (data.type === 'video') return ctx.replyWithVideo(data.fileId, { caption: data.caption, ...extra });
-  return ctx.reply(data.caption, extra);
+
+  if (data.type === 'photo') return ctx.replyWithPhoto(data.fileId, {
+    caption: data.caption,
+    ...(captionEntities.length ? { caption_entities: captionEntities } : {}),
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+  });
+
+  if (data.type === 'video') return ctx.replyWithVideo(data.fileId, {
+    caption: data.caption,
+    ...(captionEntities.length ? { caption_entities: captionEntities } : {}),
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+  });
+
+  return ctx.reply(data.caption, {
+    ...(textEntities.length ? { entities: textEntities } : {}),
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+  });
 }
 
 function scheduleOffsetMinutes() {
@@ -771,7 +786,7 @@ ${escapeHtml(String(request.text).slice(0,200))}
       });
     }
     return ctx.reply(type === 'text'
-      ? '📝 متن نهایی پست را بفرست. می‌توانی از HTML ساده مثل <b>Bold</b> استفاده کنی.'
+      ? '📝 متن نهایی پست را همان‌طور که می‌خواهی منتشر شود بفرست؛ Bold، Quote، لینک و Custom Emoji حفظ می‌شوند.'
       : '📎 فایل رسانه را بفرست.');
   });
 
@@ -796,7 +811,7 @@ ${escapeHtml(String(request.text).slice(0,200))}
     flow.step = 'caption';
     setState(ctx.from.id, 'channel_post', flow);
     await ctx.answerCbQuery(`آلبوم با ${ids.length} تصویر ثبت شد.`);
-    return ctx.reply('📝 کپشن نهایی آلبوم را بفرست.');
+    return ctx.reply('📝 کپشن نهایی آلبوم را بفرست. متن را داخل خود تلگرام Bold یا Quote کن؛ Custom Emoji هم حفظ می‌شود.');
   });
 
   bot.action('channel_button_add', async ctx => {
@@ -905,14 +920,21 @@ ${escapeHtml(String(request.text).slice(0,200))}
     if (!(await guard(ctx, 'channelPosts'))) return;
     const s = getState(ctx.from.id); if (!s) return;
     await ctx.answerCbQuery();
-    await sendChannelPreview(ctx, s.data);
-    setState(ctx.from.id, 'channel_post_preview', s.data);
-    return ctx.reply('👁 پیش‌نمایش بالا آماده است. روش انتشار را انتخاب کن.', { reply_markup: { inline_keyboard: [
-      [{ text: `🚀 انتشار فوری در ${env.channelUsername}`, callback_data: 'channel_publish', style: 'success' }],
-      [{ text: '🕒 زمان‌بندی انتشار', callback_data: 'channel_schedule' }],
-      [{ text: '✏️ بازگشت به ویرایش', callback_data: 'channel_builder' }],
-      [{ text: '❌ لغو', callback_data: 'cancel_input', style: 'danger' }]
-    ] } });
+    try {
+      await sendChannelPreview(ctx, s.data);
+      setState(ctx.from.id, 'channel_post_preview', s.data);
+      return ctx.reply('👁 پیش‌نمایش بالا آماده است. روش انتشار را انتخاب کن.', { reply_markup: { inline_keyboard: [
+        [{ text: `🚀 انتشار فوری در ${env.channelUsername}`, callback_data: 'channel_publish', style: 'success' }],
+        [{ text: '🕒 زمان‌بندی انتشار', callback_data: 'channel_schedule' }],
+        [{ text: '✏️ بازگشت به ویرایش', callback_data: 'channel_builder' }],
+        [{ text: '❌ لغو', callback_data: 'cancel_input', style: 'danger' }]
+      ] } });
+    } catch (error) {
+      console.error('CHANNEL_PREVIEW_ERROR', error);
+      return ctx.reply(`❌ پیش‌نمایش ساخته نشد.
+
+<code>${escapeHtml(errorDescription(error))}</code>`, { parse_mode: 'HTML', reply_markup: channelBuilderKeyboard(s.data) });
+    }
   });
 
   bot.action('channel_schedule', async ctx => {
@@ -958,7 +980,8 @@ ${escapeHtml(String(request.text).slice(0,200))}
       return ctx.reply(`✅ پست با موفقیت منتشر شد.\n\n🔗 ${result.postUrl || 'منتشر شد'}\n🧩 تعداد دکمه‌ها: ${(d.buttonRows || []).flat().length}`);
     } catch (error) {
       console.error('CHANNEL_PUBLISH_ERROR', error);
-      return ctx.answerCbQuery('انتشار ناموفق بود. لاگ سرور را بررسی کن.', { show_alert: true });
+      await ctx.answerCbQuery('انتشار ناموفق بود.', { show_alert: true }).catch(() => {});
+      return ctx.reply(`❌ انتشار انجام نشد.\n\n<code>${escapeHtml(errorDescription(error))}</code>`, { parse_mode: 'HTML' });
     }
   });
 
@@ -1241,16 +1264,28 @@ ${escapeHtml(String(request.text).slice(0,200))}
         data.sourceChatId = String(ctx.chat.id); data.sourceMessageId = ctx.message.message_id;
         flow.step = 'caption';
         setState(ctx.from.id, 'channel_post', flow);
-        return ctx.reply('📝 کپشن نهایی را بفرست. می‌توانی از HTML ساده مثل <b>Bold</b> استفاده کنی.');
+        return ctx.reply('📝 کپشن نهایی را بفرست. قالب‌بندی تلگرام، Quote و Custom Emoji حفظ می‌شوند.');
       }
 
       if (step === 'caption') {
-        data.caption = text || ctx.message.caption || '';
-        data.entities = ctx.message.entities || []; data.captionEntities = ctx.message.caption_entities || [];
-        data.sourceChatId = String(ctx.chat.id); data.sourceMessageId = ctx.message.message_id;
-        if (!data.caption) return ctx.reply('متن یا کپشن پست را بفرست.');
+        const rawCaption = ctx.message.text ?? ctx.message.caption ?? '';
+        if (!rawCaption.trim()) return ctx.reply('متن یا کپشن پست را بفرست.');
+
+        data.caption = rawCaption;
+        const incomingEntities = ctx.message.entities || ctx.message.caption_entities || [];
+        // The caption is usually received as a normal text message. For media
+        // posts those same offsets must be sent as caption_entities.
+        if (data.type === 'text') {
+          data.entities = incomingEntities;
+          data.captionEntities = [];
+        } else {
+          data.entities = [];
+          data.captionEntities = incomingEntities;
+        }
+        data.sourceChatId = String(ctx.chat.id);
+        data.sourceMessageId = ctx.message.message_id;
         setState(ctx.from.id, 'channel_post_builder', data);
-        return ctx.reply('✅ محتوای اصلی پست ثبت شد. حالا می‌توانی چند دکمه لینک‌دار اضافه کنی یا مستقیم پیش‌نمایش را ببینی.', { reply_markup: channelBuilderKeyboard(data) });
+        return ctx.reply('✅ متن و قالب‌بندی ثبت شد. حالا دکمه اضافه کن یا پیش‌نمایش را ببین.', { reply_markup: channelBuilderKeyboard(data) });
       }
 
       if (step === 'schedule_date') {

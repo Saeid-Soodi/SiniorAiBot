@@ -1,8 +1,8 @@
 {
   "name": "sinioraibot",
-  "version": "5.5.1",
+  "version": "5.6.0",
   "private": true,
-  "description": "SiniorAi Telegram bot v5.5.1 with global membership, field-based prompt editing, Persian scheduling and formatting-preserving publishing",
+  "description": "SiniorAi Telegram bot v5.6.0 with reliable channel post composer, formatting preservation and cover-gallery albums",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
